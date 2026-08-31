@@ -62,16 +62,74 @@ class Options:
             "horizon": "horizon_idx",
             "chunk": "inference_seq",
             "latency": "latency_ms",
+            # Written by logger >= v0.4 (feat/run-metadata-logging). The first
+            # three appear only on each chunk's first executed tick, blank
+            # elsewhere (same convention as latency_ms); buffer_len is per
+            # tick. All four are optional — older CSVs simply lack them.
+            "chunk_len": "chunk_len",
+            "skip_steps": "skip_steps",
+            "rtc_applied": "rtc_applied",
+            "buffer_len": "buffer_len",
             "cmd_prefix": "cmd_",
             "act_prefix": "actual_pos_",
             "vel_prefix": "actual_vel_",
             "eff_prefix": "actual_eff_",
+            "left_violation": "left_limit_violation",
+            "right_violation": "right_limit_violation",
         }
     )
     """CSV column layout. Change here if the logger's schema ever changes."""
 
     finger_marker: str = "finger"
     """Substring that marks a joint as a gripper finger."""
+
+    # NOTE on timing columns: wall_time is quantized to ~10 s by the logger's
+    # %.9g float format and must never be used for intervals — every duration
+    # here derives from t_rel.
+
+    meta_suffix: str = ".meta.json"
+    """Sidecar filename: <run>.csv -> <run>.meta.json (logger >= v0.4). Holds
+    the run's configuration; runs without one show 'config unknown'."""
+
+    # -------------------------------------------------- scheduling / stalls
+    stall_gap_ms: float = 100.0
+    """A tick interval longer than this counts as a stall. In the old blocking
+    loop a stall at every chunk boundary was EXPECTED (the ~240 ms round
+    trip); with prefetch a stall of any kind means starvation — a bug."""
+
+    stalled_run_min_boundary_ms: float = 100.0
+    """A run is treated as blocking-style (so the tracking table's 'bnd'
+    settle diagnosis applies) only when its median boundary tick interval
+    exceeds this; otherwise boundaries carry no catch-up time and bnd is
+    meaningless."""
+
+    # ----------------------------------------------------------- smoothness
+    splice_window_ticks: int = 3
+    """Half-window around a chunk switch for the velocity-spike check."""
+
+    # ------------------------------------------------------- grasp attempts
+    grasp_close_frac: float = 0.35
+    """A finger counts as commanded-closed when its command drops below this
+    fraction of its command range (~0.0 closed .. ~0.05 open)."""
+
+    grasp_rise_fracs: tuple = (0.1, 0.9)
+    """Fractions of the finger range bounding the close rise-time measurement
+    (command falling from 90% open to 10% open). RTC ramping lengthens this —
+    it is the 'is RTC smearing the grasp' test."""
+
+    grasp_success_min_ticks: int = 3
+    """Blocked ticks inside a closed span needed to call the grasp a success.
+    Smaller than grasp_min_ticks so an object grabbed late in the span still
+    counts."""
+
+    # -------------------------------------------------- verdicts / matrix
+    verdict_splice_ratio_max: float = 2.0
+    """Matrix verdict: a run's splice ratio at or above this fails 'smooth'."""
+
+    verdict_depth_max_steps: int = 26
+    """Matrix verdict: deepest-executed-step p95 at or beyond this fails
+    'depth'. Empirical for the current checkpoint family — grasp attempts
+    issued deeper than this tend to fail. Re-measure per checkpoint."""
 
 
 DEFAULTS = Options()
