@@ -15,7 +15,12 @@ def render(data: dict, cfg: Options) -> str:
     html = html.replace("__TITLE__", cfg.page_title)
     html = html.replace("__HI_ERR__", str(cfg.hi_error_mrad))
     html = html.replace("__HI_NM__", str(cfg.hi_contact_nm))
-    html = html.replace("__DATA__", json.dumps(data, separators=(",", ":")))
+    html = html.replace("__V_SPLICE__", str(cfg.verdict_splice_ratio_max))
+    html = html.replace("__V_DEPTH__", str(cfg.verdict_depth_max_steps))
+    # "</" inside a string value (a note, a task description) would terminate
+    # the <script> block early; escape it inside the JSON payload.
+    payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    html = html.replace("__DATA__", payload)
     return html
 
 
@@ -78,6 +83,11 @@ td.hi{color:var(--warn);font-weight:600}
 <aside>
   <h1>__TITLE__</h1>
   <div class="sub" id="gen"></div>
+  <div class="grp">Page</div>
+  <div class="seg" id="pages">
+    <button data-p="signals" class="on">signals</button>
+    <button data-p="matrix">run matrix</button>
+  </div>
   <div class="grp">Run</div>
   <div id="runlist"></div>
   <div class="grp">Compare with</div>
@@ -99,14 +109,26 @@ td.hi{color:var(--warn);font-weight:600}
   <label class="chk"><input type="checkbox" id="cbGrasp" checked> grasp shading</label>
 </aside>
 <main>
-  <div class="chips" id="chips"></div>
-  <div class="legend" id="legend"></div>
-  <div class="grid" id="grid"></div>
-  <div class="cols">
-    <div><h2>Tracking (mrad)</h2><div id="statsbox"></div></div>
-    <div><h2>Chunk profile</h2><div id="profbox"></div>
-         <h2>Contacts</h2><div id="ctcbox"></div>
-         <h2>Grasps</h2><div id="graspbox"></div></div>
+  <div id="pageSignals">
+    <div class="chips" id="chips"></div>
+    <div class="legend" id="legend"></div>
+    <div class="grid" id="grid"></div>
+    <div class="cols">
+      <div><h2>Tracking (mrad)</h2><div id="statsbox"></div>
+           <h2>Run facts</h2><div id="factsbox"></div></div>
+      <div><h2>Chunk profile</h2><div id="profbox"></div>
+           <h2>Contacts</h2><div id="ctcbox"></div>
+           <h2>Grasps</h2><div id="graspbox"></div></div>
+    </div>
+  </div>
+  <div id="pageMatrix" style="display:none">
+    <h2 style="margin-top:0">Run matrix</h2>
+    <div class="note" style="margin-bottom:8px">One row per run: configuration (from the .meta.json sidecar) + measured behaviour. Verdicts: a run failing any chip is not a valid comparison point.</div>
+    <div class="tblwrap" style="overflow-x:auto"><div id="matrixbox"></div></div>
+    <div class="cols" style="margin-top:18px">
+      <div><h2>Splice ratio vs replan cycle</h2><div class="panel" style="cursor:default"><canvas id="sc1" height="260"></canvas></div></div>
+      <div><h2>Grasp success vs executed depth p95</h2><div class="panel" style="cursor:default"><canvas id="sc2" height="260"></canvas></div></div>
+    </div>
   </div>
 </main>
 </div>
@@ -117,8 +139,11 @@ td.hi{color:var(--warn);font-weight:600}
 <script>
 const DATA=__DATA__;
 const HI_ERR=__HI_ERR__, HI_NM=__HI_NM__;
+const V_SPLICE=__V_SPLICE__, V_DEPTH=__V_DEPTH__;
 const runs=DATA.runs, names=Object.keys(runs);
-let runA=names[0], runB="", view="track", side="all";
+let runA=names[0], runB="", view="track", side="all", page="signals";
+const dash=v=>(v==null||v==="")?"—":v;
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const $=id=>document.getElementById(id);
 $("gen").textContent=names.length+" run"+(names.length===1?"":"s")+" · built "+DATA.generated;
 
@@ -146,6 +171,7 @@ function buildSidebar(){
 $("cmpsel").onchange=e=>{runB=e.target.value; render()};
 document.querySelectorAll("#views button").forEach(b=>b.onclick=()=>{view=b.dataset.v; render()});
 document.querySelectorAll("#sides button").forEach(b=>b.onclick=()=>{side=b.dataset.s; render()});
+document.querySelectorAll("#pages button").forEach(b=>b.onclick=()=>{page=b.dataset.p; render()});
 $("cbBounds").onchange=render; $("cbGrasp").onchange=render;
 
 function seriesFor(run,j){
@@ -197,14 +223,47 @@ function drawPanel(cv,j,big){
   g.fillText(Math.round(xmax)+"s",W-padR-22,H-4); g.fillText("0",padL,H-4);
 }
 function metaChip(name,cls){
-  const m=runs[name].meta;
-  const lat=m.lat_p50==null?"":` · lat p50 <b>${m.lat_p50}ms</b> p90 ${m.lat_p90} max ${m.lat_max}`;
-  return `<span class="chip ${cls}"><b>${name}</b> · ${m.dur_s}s · ${m.chunks} chunks${lat}</span>`;
+  const r=runs[name], m=r.meta, sc=r.schedule||{}, sm=r.smooth||{}, cfg=r.cfg;
+  const lat=m.lat_p50==null?"":` · lat p50 <b>${m.lat_p50}ms</b>`;
+  let mode="";
+  if(cfg) mode=` · ${cfg.prefetch_enable?"prefetch":"blocking"}${cfg.rtc_enable?"+RTC":""}`;
+  else if(m.stalled_run!=null) mode=` · ${m.stalled_run?"blocking?":"prefetch?"}`;
+  const depth=sc.depth_p95!=null?` · depth p95 <b>${sc.depth_p95}</b>`:"";
+  const spl=sm.splice_ratio!=null?` · splice <b>×${sm.splice_ratio}</b>`:"";
+  const st=sc.stall_count!=null?` · stalls ${sc.stall_count}`:"";
+  return `<span class="chip ${cls}"><b>${esc(name)}</b> · ${m.dur_s}s · ${m.chunks} chunks${mode}${lat}${depth}${spl}${st}</span>`;
+}
+function graspSummary(r){
+  // only attempts whose outcome was measurable count toward the rate
+  const ev=r.grasp_events||{};
+  let att=0,succ=0;
+  Object.values(ev).forEach(list=>list.forEach(e=>{
+    if(e.success!=null){att++; if(e.success)succ++}}));
+  return {att,succ};
+}
+function isBlocking(r){
+  return r.cfg?!r.cfg.prefetch_enable:!!(r.meta&&r.meta.stalled_run);
+}
+function verdicts(r){
+  const sc=r.schedule||{}, sm=r.smooth||{}, vi=r.violations||{};
+  const out=[];
+  // a blocking run stalls at every boundary by design — the stalls verdict
+  // only applies where a stall means starvation (prefetch runs)
+  if(sc.stall_count!=null&&!isBlocking(r))out.push({k:"stalls 0",ok:sc.stall_count===0});
+  if(sm.splice_ratio!=null)out.push({k:"splice <"+V_SPLICE,ok:sm.splice_ratio<V_SPLICE});
+  if(sc.depth_p95!=null)out.push({k:"depth <"+V_DEPTH,ok:sc.depth_p95<V_DEPTH});
+  const v=Math.max(vi.left||0,vi.right||0);
+  if(vi.left!=null||vi.right!=null)out.push({k:"limits 0",ok:v===0});
+  return out;
 }
 function render(){
   buildSidebar();
   document.querySelectorAll("#views button").forEach(b=>b.classList.toggle("on",b.dataset.v===view));
   document.querySelectorAll("#sides button").forEach(b=>b.classList.toggle("on",b.dataset.s===side));
+  document.querySelectorAll("#pages button").forEach(b=>b.classList.toggle("on",b.dataset.p===page));
+  document.getElementById("pageSignals").style.display=page==="signals"?"":"none";
+  document.getElementById("pageMatrix").style.display=page==="matrix"?"":"none";
+  if(page==="matrix"){renderMatrix();return}
   $("chips").innerHTML=metaChip(runA,"")+(runB?metaChip(runB,"b"):"");
   const unit=view==="track"?"rad":view==="err"?"mrad":view==="vel"?"rad/s":"Nm";
   let lg=`<b>${unit}</b>`;
@@ -260,9 +319,105 @@ function renderTables(){
   if(!fingers.length)gh="<div class='note'>no gripper columns</div>";
   fingers.forEach(n=>{
     const sp=gr[n];
-    gh+=`<div class="note">${short(n)}: ${sp.length?sp.map(([a,b])=>a+"–"+b+"s").join(", "):"never held"}</div>`;
+    gh+=`<div class="note">${short(n)} held: ${sp.length?sp.map(([a,b])=>a+"–"+b+"s").join(", "):"never"}</div>`;
+  });
+  const ge=runs[runA].grasp_events||{};
+  Object.keys(ge).forEach(n=>{
+    ge[n].forEach(e=>{
+      const ok=e.success==null?"?":(e.success?"✓ held":"✗ air");
+      const ov=e.in_overlap==null?"":(e.in_overlap?" · in RTC overlap":" · outside overlap");
+      gh+=`<div class="note">${short(n)} close @ ${e.t}s · step ${e.hi} · rise ${dash(e.rise_ms)}ms · ${ok}${ov}</div>`;
+    });
   });
   $("graspbox").innerHTML=gh;
+
+  // Run facts: scheduling, smoothness, safety — degrade to "—" for old logs.
+  const sc=runs[runA].schedule||{}, sm=runs[runA].smooth||{}, vi=runs[runA].violations||{}, cfg=runs[runA].cfg;
+  let fh="<table>";
+  const row=(k,v)=>`<tr><td>${k}</td><td class="r">${dash(v)}</td></tr>`;
+  fh+=row("replan cycle (steps, p50/p95)",sc.cycle_p50!=null?`${sc.cycle_p50} / ${sc.cycle_p95}`:null);
+  fh+=row("skip on arrival (p50)",sc.skip_p50!=null?sc.skip_p50+(sc.skip_logged_p50!=null?` (logged ${sc.skip_logged_p50})`:""):null);
+  fh+=row("executed depth (p50/p95/max)",sc.depth_p50!=null?`${sc.depth_p50} / ${sc.depth_p95} / ${sc.depth_max}`:null);
+  fh+=row("server chunk length (p50)",sc.chunk_len_p50);
+  fh+=row("stalls >100ms / time stalled",sc.stall_count!=null?`${sc.stall_count} / ${(100*(sc.stalled_frac||0)).toFixed(1)}%`:null);
+  fh+=row("starved ticks (buffer=0)",sc.starved_ticks);
+  fh+=row("effective rate (Hz)",sc.effective_hz);
+  fh+=row("RTC applied (fraction of chunks)",sc.rtc_applied_frac);
+  fh+=row("cmd step within / at splice (mrad)",sm.step_within_p50!=null?`${sm.step_within_p50} / ${dash(sm.step_splice_p50)}`:null);
+  fh+=row("splice ratio",sm.splice_ratio!=null?`×${sm.splice_ratio}${sm.splice_ratio>=V_SPLICE?" ⚠":""}${runs[runA].meta.stalled_run?" (spans a stall — compare with blocking runs only)":""}`:null);
+  fh+=row("splice p95 / max (mrad)",sm.splice_p95!=null?`${sm.splice_p95} / ${sm.splice_max} (chunk ${sm.splice_max_seq})`:null);
+  fh+=row("cmd jerk within / at splice",sm.jerk_within_p50!=null?`${sm.jerk_within_p50} / ${dash(sm.jerk_splice_p50)}`:null);
+  fh+=row("reversing joints at splice / within (median)",sm.rev_joints_splice_p50!=null?`${sm.rev_joints_splice_p50} / ${dash(sm.rev_joints_within_p50)}`:null);
+  fh+=row("velocity spike at splice (×median)",sm.vel_spike_ratio_p50);
+  fh+=row("limit-guard held left / right",(vi.left!=null||vi.right!=null)?`${(100*(vi.left||0)).toFixed(1)}% / ${(100*(vi.right||0)).toFixed(1)}%`:null);
+  fh+="</table>";
+  if(cfg){
+    fh+=`<div class="note" style="margin-top:6px">config: ${esc(dash(cfg.checkpoint_label)||"?")} · exec ${esc(dash(cfg.execution_horizon))} · prefetch ${cfg.prefetch_enable?("on, lead "+esc(dash(cfg.prefetch_lead))):"off"} · RTC ${cfg.rtc_enable?("on, overlap "+esc(dash(cfg.rtc_overlap_steps))+", frozen "+esc(dash(cfg.rtc_frozen_steps))):"off"} · v${esc(dash(cfg.package_version))}</div>`;
+    if(cfg.notes)fh+=`<div class="note">notes: ${esc(cfg.notes)}</div>`;
+  }else{
+    fh+=`<div class="note" style="margin-top:6px">config unknown — no .meta.json sidecar (log predates logger v0.4)</div>`;
+  }
+  $("factsbox").innerHTML=fh;
+}
+
+function renderMatrix(){
+  const cols=[
+    ["run",r=>esc(r.name)],["ckpt",r=>r.cfg?esc(dash(r.cfg.checkpoint_label)):"—"],
+    ["mode",r=>r.cfg?((r.cfg.prefetch_enable?"prefetch":"blocking")+(r.cfg.rtc_enable?"+RTC":"")):"—"],
+    ["exec",r=>r.cfg?dash(r.cfg.execution_horizon):"—"],
+    ["cycle p50",r=>dash((r.schedule||{}).cycle_p50)],
+    ["skip p50",r=>dash((r.schedule||{}).skip_p50)],
+    ["depth p95",r=>dash((r.schedule||{}).depth_p95)],
+    ["splice ×",r=>dash((r.smooth||{}).splice_ratio)],
+    ["stalls",r=>dash((r.schedule||{}).stall_count)],
+    ["eff Hz",r=>dash((r.schedule||{}).effective_hz)],
+    ["grasp ✓/att",r=>{const g=graspSummary(r);return g.att?`${g.succ}/${g.att}`:"—"}],
+    ["lat p50/p95",r=>r.meta.lat_p50!=null?`${r.meta.lat_p50}/${dash((r.schedule||{}).lat_p95)}`:"—"],
+    ["limit %",r=>{const v=r.violations||{};return (v.left!=null||v.right!=null)?(100*Math.max(v.left||0,v.right||0)).toFixed(1):"—"}],
+  ];
+  let h="<table><tr>"+cols.map(c=>`<th${c[0]==="run"?"":' class="r"'}>${c[0]}</th>`).join("")+"<th>verdicts</th></tr>";
+  names.forEach(n=>{
+    const r={...runs[n],name:n};
+    h+="<tr>"+cols.map((c,i)=>`<td${i?' class="r"':""}>${c[1](r)}</td>`).join("");
+    const vs=verdicts(runs[n]);
+    h+=`<td>${vs.length?vs.map(v=>`<span style="color:${v.ok?"var(--good)":"var(--warn)"};font-weight:600">${v.ok?"✓":"✗"} ${v.k}</span>`).join(" &nbsp;"):"—"}</td></tr>`;
+  });
+  $("matrixbox").innerHTML=h+"</table>";
+  requestAnimationFrame(()=>{
+    scatter($("sc1"),names.map(n=>({x:(runs[n].schedule||{}).cycle_p50,y:(runs[n].smooth||{}).splice_ratio,l:n})),"cycle p50 (steps)","splice ratio",{hline:V_SPLICE});
+    scatter($("sc2"),names.map(n=>{const g=graspSummary(runs[n]);return {x:(runs[n].schedule||{}).depth_p95,y:g.att?g.succ/g.att:null,l:n}}),"depth p95 (steps)","grasp success rate",{vline:V_DEPTH,ymax:1});
+  });
+}
+
+function scatter(cv,pts,xl,yl,opt){
+  opt=opt||{};
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=260;
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
+  const g=cv.getContext("2d");g.scale(dpr,dpr);
+  const padL=44,padR=10,padT=10,padB=26,iw=W-padL-padR,ih=H-padT-padB;
+  const data=pts.filter(p=>p.x!=null&&p.y!=null);
+  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  if(!data.length){g.fillText("no runs with these metrics yet",padL,H/2);return}
+  let xmin=Math.min(...data.map(p=>p.x)),xmax=Math.max(...data.map(p=>p.x));
+  let ymin=0,ymax=opt.ymax!=null?opt.ymax:Math.max(...data.map(p=>p.y));
+  if(opt.vline!=null){xmin=Math.min(xmin,opt.vline);xmax=Math.max(xmax,opt.vline)}
+  if(opt.hline!=null)ymax=Math.max(ymax,opt.hline);
+  if(xmax-xmin<1e-9){xmin-=1;xmax+=1}
+  if(ymax-ymin<1e-9)ymax+=1;
+  const xpad=(xmax-xmin)*.08;xmin-=xpad;xmax+=xpad;ymax*=1.08;
+  const X=v=>padL+iw*(v-xmin)/(xmax-xmin),Y=v=>padT+ih*(1-(v-ymin)/(ymax-ymin));
+  g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
+  if(opt.hline!=null){g.strokeStyle=css("--warn");g.setLineDash([4,3]);g.beginPath();g.moveTo(padL,Y(opt.hline));g.lineTo(W-padR,Y(opt.hline));g.stroke();g.setLineDash([])}
+  if(opt.vline!=null){g.strokeStyle=css("--warn");g.setLineDash([4,3]);g.beginPath();g.moveTo(X(opt.vline),padT);g.lineTo(X(opt.vline),padT+ih);g.stroke();g.setLineDash([])}
+  data.forEach(p=>{
+    g.fillStyle=css("--accent");g.beginPath();g.arc(X(p.x),Y(p.y),4,0,7);g.fill();
+    g.fillStyle=css("--muted");g.fillText(p.l.slice(0,14),X(p.x)+6,Y(p.y)+3);
+  });
+  g.fillStyle=css("--muted");
+  g.fillText(xl,W/2-20,H-6);
+  g.save();g.translate(10,H/2+20);g.rotate(-Math.PI/2);g.fillText(yl,0,0);g.restore();
+  g.fillText(String(Math.round(xmin*10)/10),padL,H-14);g.fillText(String(Math.round(xmax*10)/10),W-padR-24,H-14);
+  g.fillText(String(Math.round(ymax*100)/100),2,padT+8);
 }
 window.addEventListener("resize",()=>render());
 render();
