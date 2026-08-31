@@ -22,15 +22,41 @@ Inference is far too slow for that. Instead:
 
 Two consequences show up all over the dashboard:
 
-- **The boundary stall.** Every time a new chunk is requested, the arm freezes
-  for the full round trip (network + model). In the logs this is the tick
-  interval that is ~240 ms instead of 33 ms.
+- **The boundary stall (blocking runs).** In the original loop, every new
+  chunk request froze the arm for the full round trip (network + model) — in
+  the logs, a tick interval of ~240 ms instead of 33 ms.
 - **Staleness.** Step 0 of a chunk executes right after the observation;
   step 15 executes ~700 ms later, still based on that old picture. Late steps
   in a chunk are "older" decisions than early ones.
 
 `inference_seq` in the CSV numbers the chunks; `horizon_idx` says which step
-within its chunk each tick executed (0 = first step of a fresh chunk).
+of its chunk each tick executed.
+
+### Prefetch and RTC runs (client v0.4+)
+
+Two per-run options change the picture, and logs of all kinds can sit in the
+same folder:
+
+- **Prefetch** — the next chunk is requested on a background thread while the
+  current one is still playing, so the arm never stops. Because the round
+  trip (~270 ms ≈ 8–9 steps) elapses while the arm keeps moving, the steps
+  that went stale in flight are **skipped** on arrival: a chunk's first
+  executed `horizon_idx` is typically 7–12, not 0. Chunks are also
+  **truncated** — a fresh chunk replaces whatever was left of the old buffer
+  — so executed steps-per-chunk varies.
+- **RTC** — each request carries the previous chunk back, and the server
+  grows the new chunk out of it instead of from scratch, to smooth the seam
+  between chunks.
+
+The dashboard detects boundaries from `inference_seq` changes (never from
+`horizon_idx == 0`), so all of it works for both kinds of run. In a prefetch
+run a long tick gap is no longer expected — it means the buffer ran dry
+(**starvation**), which is a bug, and it shows up under *stalls* in Run facts.
+
+Runs from client v0.4+ also ship a `<run>.meta.json` **sidecar** with the full
+configuration (checkpoint label, prefetch/RTC settings, execution horizon…).
+It feeds the config line under Run facts and the run-matrix columns. Older
+runs show "config unknown" — everything else still works.
 
 ---
 
@@ -84,6 +110,10 @@ the joint *lags* — give it time and it catches up. If they are equal, the
 joint holds a **standing offset** — extra time doesn't help. On the adibot,
 they are equal: the arm sags under gravity (see §4).
 
+`bnd` only exists for **blocking-style runs** (the dashboard checks whether
+boundaries actually carried a stall). In a prefetch run there is no catch-up
+time at a boundary, the diagnosis is undefined, and the column shows "—".
+
 Large p50 values are highlighted (threshold in `config.py`).
 
 ---
@@ -114,22 +144,59 @@ not a clean error signal. The dashboard handles this two ways:
 Answers: **do commands get worse the further you are into a chunk?**
 (They execute on an older observation, so they might.)
 
-One row per step-within-chunk (0 … N−1), median over every chunk in the run:
+One row per **observed** `horizon_idx`, median over every chunk in the run.
+For a blocking run the rows run 0 … N−1; for a prefetch run they start where
+the skip lands (typically 7–12) and reach as deep as execution ever got.
 
 - **err mrad** — tracking error at that step, offset-corrected (each joint's
   constant sag removed so the trend is visible).
 - **cmd step** — how big a stride the command takes at that step (max over
-  arm joints).
+  arm joints). Chunk-switch ticks are excluded — the jump across a switch is
+  the *splice* and is reported separately under Run facts.
 
 How to read it:
 
 - **Error creeping up** along the rows = late-chunk commands degrade. Gentle
-  creep is normal; a cliff means the execution horizon is too long.
-- **Row 0's `cmd step` is the splice** — the jump from the previous chunk's
-  last command to this chunk's first. This is where chunk-to-chunk
-  disagreement (the thing that causes boundary jitter) shows up.
+  creep is normal; a cliff means execution is reaching too deep.
+- The **deepest rows** are the ones grasp attempts care about: an attempt
+  issued deeper than the usable depth tends to fail (see Run facts / matrix,
+  `depth p95`).
 - Comparing two runs with different execution horizons (16 vs 25) in this
   table is the direct way to decide whether a longer horizon is safe.
+
+---
+
+## 5b. Run facts
+
+The per-run summary next to the tracking table. All "—" on a metric means the
+log doesn't carry what it needs (old format), never an error.
+
+**Scheduling** — *replan cycle* (executed steps between chunk switches; with
+truncation this is a distribution, not a constant), *skip on arrival*
+(measured `min horizon_idx` per chunk, cross-checked against the logged
+`skip_steps`), *executed depth* (max `horizon_idx` per chunk — how deep into
+its prediction the run actually played; p95 is the number to watch),
+*stalls* (tick gaps > 100 ms: expected in a blocking run, **starvation** in a
+prefetch run), *starved ticks* (`buffer_len` hit 0), *effective rate*, and
+*RTC applied* (fraction of chunks that really carried a previous chunk — the
+first one never does).
+
+**Smoothness** (arm joints only; grippers step sharply by design) —
+*cmd step within / at splice* and their ratio: the **splice ratio**, the
+headline smoothness number. 1× means a chunk switch moves the command no more
+than an ordinary tick; the historical bad value on this arm was 16×. Also
+splice p95/max with the offending chunk number, command jerk in both pools,
+reversing-joint counts at splice vs within (only the excess over the within
+baseline matters), and the velocity spike within ±3 ticks of a splice.
+
+One honest caveat: in a *blocking* run the splice interval spans the ~240 ms
+stall, so its command jump is naturally larger than a 33 ms step — compare
+splice ratios between runs of the same kind, and check `stalls` to know which
+kind a run is.
+
+**Safety** — the fraction of ticks where the limit guard held a side instead
+of publishing. A high rate invalidates the run's smoothness numbers: held
+ticks repeat the old command, which fakes smoothness.
 
 ---
 
@@ -170,15 +237,27 @@ This reconstructs the task storyline from the log alone: when the object was
 picked, how long it was carried, when both hands held it (a handoff), when it
 was released — or that a grasp closed on air. No video needed.
 
+Below the spans, every **close attempt** is listed with:
+
+- the **step** (`horizon_idx`) it was issued at — attempts issued deeper than
+  the usable depth tend to fail, and this measures that directly across runs;
+- the **rise time** of the close command (10→90% of the drop) — RTC's
+  blending stretches commands, so a lengthening rise time is the test for
+  "RTC is smearing the grasp";
+- for RTC runs, whether the close landed **inside the RTC overlap region**
+  (the early steps the server blends with the previous chunk);
+- **✓ held / ✗ air** — whether the finger actually stopped on something.
+
 ---
 
 ## 8. Run chips (top of the page)
 
-Per selected run: duration, number of chunks, and the request **latency** —
-`latency_ms` is the full round trip the robot measured around each chunk
-request (packing + network + model + return). p50 is the typical wait, p90
-and max show the tail. The very first request of a run is usually slower
-(server warm-up).
+Per selected run: duration, number of chunks, the run kind
+(blocking / prefetch / prefetch+RTC — from the sidecar, or guessed from
+whether boundaries stall when there is none), request **latency** p50
+(`latency_ms` is the full round trip the robot measured around each chunk
+request), executed **depth p95**, the **splice ratio**, and the **stall
+count**. The very first request of a run is usually slower (server warm-up).
 
 ---
 
@@ -190,4 +269,36 @@ tracking + chunk-profile tables grow side-by-side columns. Boundaries and
 grasp shading always belong to run A (the sidebar selection).
 
 Typical uses: same episode before/after a checkpoint change; horizon 16 vs
-horizon 25; a good run vs the run that failed.
+horizon 25; blocking vs prefetch on the same task; a good run vs the run
+that failed.
+
+---
+
+## 10. Run matrix
+
+The page for deciding **which configuration wins**. One row per run:
+configuration from the sidecar (checkpoint, mode, execution horizon) beside
+the measured behaviour (cycle, skip, depth p95, splice ratio, stalls,
+effective Hz, grasp successes/attempts, latency, limit-guard rate).
+
+**Verdict chips** mark whether a run is a valid comparison point at all:
+stalls = 0, splice ratio below the configured limit, depth p95 inside the
+usable range, no limit-guard holds. A run failing a chip isn't "worse" — its
+*other* numbers just can't be trusted for comparison, because the failure
+contaminates them.
+
+Two plots at the bottom: **splice ratio vs replan cycle** (does replanning
+more often cost smoothness?) and **grasp success vs executed depth p95** —
+if grasps fail past a depth, the cliff appears here. Threshold lines come
+from `config.py` and are checkpoint-specific: re-measure before trusting
+them on a new model.
+
+---
+
+## What the CSV cannot tell you
+
+True chunk-to-chunk *disagreement* (how much the new chunk differs from what
+the old one would have done) and verification that RTC's frozen region was
+honored both need the **unexecuted** part of each chunk, which the logger
+does not record. Measuring those would need a per-chunk sidecar with the
+full predicted array (~2.5 KB/chunk) — a logger change, not a dashboard one.
