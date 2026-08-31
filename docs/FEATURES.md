@@ -41,9 +41,28 @@ nothing to install for the reader. Light and dark theme follow the system.
 - **Compare mode** — overlay any second run dashed, with side-by-side
   tracking and chunk-profile tables (handles runs with different execution
   horizons).
-- **Tables** — tracking stats (p50/p95/lag/mid/bnd), chunk profile,
-  contact events, grasp spans. See
-  [READING_THE_DASHBOARD.md](READING_THE_DASHBOARD.md) for how to read each.
+- **Tables** — tracking stats (p50/p95/lag/mid/bnd), Run facts (scheduling,
+  smoothness, safety), chunk profile, contact events, grasp spans and close
+  attempts. See [READING_THE_DASHBOARD.md](READING_THE_DASHBOARD.md) for how
+  to read each.
+- **Run matrix page** — one row per run: sidecar config beside measured
+  behaviour (cycle, skip, depth p95, splice ratio, stalls, effective Hz,
+  grasp success, latency, limit-guard rate) with pass/fail verdict chips,
+  plus splice-vs-cycle and grasp-success-vs-depth scatter plots.
+
+## Prefetch / RTC awareness (client v0.4+)
+
+- Chunk boundaries come from `inference_seq` changes, so prefetch runs
+  (where `horizon_idx` never hits 0) are read correctly alongside old
+  blocking runs in the same folder.
+- The `<run>.meta.json` sidecar is picked up automatically and shown in the
+  chips, Run facts and the matrix; runs without one say "config unknown".
+- The new per-chunk columns (`chunk_len`, `skip_steps`, `rtc_applied`,
+  `buffer_len`) feed the scheduling metrics when present and degrade to "—"
+  when not.
+- The tracking table's `bnd` settle diagnosis is computed only for runs whose
+  boundaries actually stalled; long tick gaps in a prefetch run are reported
+  as starvation instead of expected boundaries.
 
 ## Robustness (all verified against crafted bad inputs)
 
