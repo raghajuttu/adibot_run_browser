@@ -84,9 +84,27 @@ def _mrad(value: float) -> float | None:
     return None if not np.isfinite(v) else round(v * 1000, 1)
 
 
+def _opt_series(df: pd.DataFrame, name: str) -> pd.Series | None:
+    """A column that may not exist (logger >= v0.4 only)."""
+    return df[name] if name in df.columns else None
+
+
+def _pct(x, q) -> float | None:
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if len(x) == 0:
+        return None
+    return round(float(np.percentile(x, q)), 1)
+
+
 # ---------------------------------------------------------------- per-run work
-def process_run(csv_path: Path, cfg: Options) -> dict:
-    """Everything the dashboard shows for one run, as one JSON-ready dict."""
+def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> dict:
+    """Everything the dashboard shows for one run, as one JSON-ready dict.
+
+    run_meta is the parsed .meta.json sidecar (None for pre-v0.4 logs); it is
+    both echoed into the result and used where a metric needs a configured
+    value (e.g. the RTC overlap region).
+    """
     col = cfg.column_names
     df = pd.read_csv(csv_path)
     for required in (col["time"], col["horizon"], col["chunk"]):
@@ -100,8 +118,25 @@ def process_run(csv_path: Path, cfg: Options) -> dict:
 
     t = df[col["time"]].values.astype(float)
     hi = df[col["horizon"]].values
+    seq = df[col["chunk"]].values
     tick_ms = float(np.median(np.diff(t)) * 1000) if len(t) > 1 else 0.0
     lat = df[col["latency"]].dropna() if col["latency"] in df.columns else pd.Series(dtype=float)
+
+    # A chunk boundary is where inference_seq changes — NOT horizon_idx == 0.
+    # Prefetch skips the steps that elapsed in flight, so a chunk's first
+    # executed horizon_idx is typically 7-12 and 0 may never occur.
+    new_chunk = np.zeros(len(df), dtype=bool)
+    if len(df):
+        new_chunk[0] = True
+        new_chunk[1:] = np.diff(seq) != 0
+
+    dt_ms = np.diff(t) * 1000 if len(t) > 1 else np.array([])
+    boundary_dt = dt_ms[new_chunk[1:]] if len(dt_ms) else np.array([])
+    # Blocking-style run: boundaries carry a stall (the old play/freeze loop).
+    # Only then does the tracking table's bnd column mean "after settle time".
+    stalled_run = bool(
+        len(boundary_dt) and np.median(boundary_dt) > cfg.stalled_run_min_boundary_ms
+    )
 
     run: dict = {
         "joints": names,
@@ -113,16 +148,21 @@ def process_run(csv_path: Path, cfg: Options) -> dict:
             "lat_p50": round(float(lat.median()), 1) if len(lat) else None,
             "lat_p90": round(float(lat.quantile(0.9)), 1) if len(lat) else None,
             "lat_max": round(float(lat.max()), 1) if len(lat) else None,
+            "stalled_run": stalled_run,
         },
-        "bounds": [round(float(x), 3) for x in t[hi == 0]],
+        "cfg": run_meta or None,
+        "bounds": [round(float(x), 3) for x in t[new_chunk]],
         "traces": {},
     }
 
-    h_max = int(hi.max()) if len(hi) else 0
-    lo = max(1, round(h_max * 0.2))
-    hi_cut = max(2, round(h_max * 0.8))
-    mid_mask = (hi > lo) & (hi < hi_cut)
-    bnd_mask = hi == 0
+    # Position within the executed part of the chunk (0 = first executed tick),
+    # independent of the horizon_idx offset prefetch introduces.
+    pos = np.zeros(len(df), dtype=int)
+    if len(df):
+        starts = np.where(new_chunk)[0]
+        pos = np.arange(len(df)) - starts[np.searchsorted(starts, np.arange(len(df)), "right") - 1]
+    mid_mask = pos >= 2
+    bnd_mask = new_chunk
 
     def has(prefix, n):
         return f"{prefix}{n}" in df.columns
@@ -150,8 +190,13 @@ def process_run(csv_path: Path, cfg: Options) -> dict:
                     "mid": _mrad(np.nanmedian(abs_err[mid_mask]))
                     if mid_mask.any() and not np.isnan(abs_err[mid_mask]).all()
                     else None,
+                    # bnd is a settle diagnosis: it compares error after the
+                    # boundary wait to mid-chunk error. Without a stall there
+                    # is no wait, so the number would be meaningless.
                     "bnd": _mrad(np.nanmedian(abs_err[bnd_mask]))
-                    if bnd_mask.any() and not np.isnan(abs_err[bnd_mask]).all()
+                    if stalled_run
+                    and bnd_mask.any()
+                    and not np.isnan(abs_err[bnd_mask]).all()
                     else None,
                 }
             )
@@ -165,7 +210,11 @@ def process_run(csv_path: Path, cfg: Options) -> dict:
 
     run["contacts"] = _contacts(df, names, t, cfg)
     run["grasps"] = _grasps(df, names, t, cfg)
-    run["profile"] = _chunk_profile(df, names, hi, cfg)
+    run["profile"] = _chunk_profile(df, names, hi, new_chunk, cfg)
+    run["schedule"] = _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg)
+    run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
+    run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
+    run["violations"] = _violation_rates(df, run_meta, cfg)
     return run
 
 
@@ -218,9 +267,16 @@ def _grasps(df, names, t, cfg: Options) -> dict:
     return out
 
 
-def _chunk_profile(df, names, hi, cfg: Options) -> dict:
-    """Offset-corrected tracking error and command step size by position within
-    the chunk (arm joints only). Adapts to any execution horizon."""
+def _chunk_profile(df, names, hi, new_chunk, cfg: Options) -> dict:
+    """Offset-corrected tracking error and command step size by observed
+    horizon_idx (arm joints only). Adapts to any execution horizon and to the
+    horizon_idx offset prefetch introduces (rows are indexed by the values
+    that actually occur, which may start at 7-12 rather than 0).
+
+    Chunk-switch ticks are EXCLUDED from the step-size medians: the command
+    difference across a switch is the splice, which would contaminate
+    whichever horizon_idx the switch happens to land on. The splice is
+    reported separately by the smoothness block."""
     col = cfg.column_names
     arm = [
         n
@@ -243,12 +299,245 @@ def _chunk_profile(df, names, hi, cfg: Options) -> dict:
     step = np.abs(
         np.diff(df[[f"{col['cmd_prefix']}{n}" for n in arm]].values, axis=0)
     ).max(axis=1) * 1000
+    # step[i] spans rows i -> i+1; it belongs to the splice when row i+1
+    # starts a new chunk.
+    step_ok = ~new_chunk[1:]
     for k in sorted(np.unique(hi)):
         m = hi == k
+        sm = m[1:] & step_ok
         prof["k"].append(int(k))
         with np.errstate(invalid="ignore"):
             e = float(np.nanmedian(err_m[m])) if m.any() else float("nan")
-            s = float(np.nanmedian(step[m[1:]])) if m[1:].any() else float("nan")
+            s = float(np.nanmedian(step[sm])) if sm.any() else float("nan")
         prof["err"].append(round(e, 1) if np.isfinite(e) else None)
         prof["step"].append(round(s, 1) if np.isfinite(s) else None)
     return prof
+
+
+def _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg: Options) -> dict:
+    """Scheduling facts: replan cycle, skip, executed depth, steps per chunk,
+    stalls/starvation, effective rate. All timing from t_rel (wall_time is
+    quantized by the logger and unusable for intervals)."""
+    col = cfg.column_names
+    out: dict = {}
+    if len(df) < 2:
+        return out
+    starts = np.where(new_chunk)[0]
+    # steps executed per chunk (chunks get truncated when a new one lands)
+    per_chunk = np.diff(np.append(starts, len(df)))
+    out["cycle_p50"] = _pct(per_chunk, 50)
+    out["cycle_p95"] = _pct(per_chunk, 95)
+    out["cycle_min"] = int(per_chunk.min())
+    out["cycle_max"] = int(per_chunk.max())
+    # measured skip / executed depth, from observed horizon_idx per chunk
+    g = pd.Series(hi).groupby(pd.Series(seq))
+    skips = g.min().values
+    depths = g.max().values
+    out["skip_p50"] = _pct(skips, 50)
+    out["depth_p50"] = _pct(depths, 50)
+    out["depth_p95"] = _pct(depths, 95)
+    out["depth_max"] = int(depths.max())
+    # stalls: any tick interval beyond the threshold. Expected in the old
+    # blocking loop; starvation in a prefetch run.
+    stall = dt_ms > cfg.stall_gap_ms
+    out["stall_count"] = int(stall.sum())
+    dur_ms = float(t[-1] - t[0]) * 1000
+    # Time lost to stalls = the excess over what those ticks would have taken
+    # anyway at the nominal rate, not the whole interval.
+    nominal = float(np.median(dt_ms)) if len(dt_ms) else 0.0
+    lost = float((dt_ms[stall] - nominal).sum())
+    out["stalled_frac"] = round(lost / dur_ms, 4) if dur_ms > 0 else None
+    out["effective_hz"] = round(len(df) / (dur_ms / 1000), 1) if dur_ms > 0 else None
+    # logger >= v0.4 columns (None-safe when absent)
+    cl = _opt_series(df, col["chunk_len"])
+    if cl is not None and cl.notna().any():
+        out["chunk_len_p50"] = _pct(cl.dropna().values, 50)
+    sk = _opt_series(df, col["skip_steps"])
+    if sk is not None and sk.notna().any():
+        out["skip_logged_p50"] = _pct(sk.dropna().values, 50)
+    rtc = _opt_series(df, col["rtc_applied"])
+    if rtc is not None and rtc.notna().any():
+        v = rtc.dropna().values.astype(float)
+        out["rtc_applied_frac"] = round(float(v.mean()), 3)
+    buf = _opt_series(df, col["buffer_len"])
+    if buf is not None and buf.notna().any():
+        out["starved_ticks"] = int((buf.dropna().values.astype(float) == 0).sum())
+    lat = df[col["latency"]].dropna() if col["latency"] in df.columns else pd.Series(dtype=float)
+    out["lat_p95"] = _pct(lat.values, 95) if len(lat) else None
+    return out
+
+
+def _smoothness(df, names, new_chunk, dt_ms, cfg: Options) -> dict:
+    """Command smoothness, arm joints only (grippers step sharply by design).
+
+    Splits |Δcmd| into at-splice (row starts a new chunk) vs within-chunk
+    pools. splice_ratio = median at-splice / median within — 1x is perfectly
+    smooth. Also command jerk, direction reversals at the splice, and the
+    velocity spike near splices when velocity was logged."""
+    col = cfg.column_names
+    arm = [n for n in names if cfg.finger_marker not in n]
+    out: dict = {}
+    if not arm or len(df) < 3:
+        return out
+    def _med(x) -> float | None:
+        """nan-safe median -> rounded float or None (never NaN: a truncated
+        final CSV row NaN-pads the cmd block, and NaN must not reach JSON)."""
+        with np.errstate(invalid="ignore"):
+            v = float(np.nanmedian(x)) if len(x) else float("nan")
+        return round(v, 1) if np.isfinite(v) else None
+
+    cmds = df[[f"{col['cmd_prefix']}{n}" for n in arm]].values.astype(float)
+    d1 = np.diff(cmds, axis=0)  # step vectors, per joint
+    with np.errstate(invalid="ignore"):
+        mag = np.abs(d1).max(axis=1) * 1000  # mrad
+    at = new_chunk[1:]
+    within = ~at
+    out["step_within_p50"] = _med(mag[within])
+    out["step_splice_p50"] = _med(mag[at])
+    if (
+        out["step_within_p50"] is not None
+        and out["step_splice_p50"] is not None
+        and out["step_within_p50"] > 0
+    ):
+        out["splice_ratio"] = round(out["step_splice_p50"] / out["step_within_p50"], 2)
+    out["splice_p95"] = _pct(mag[at], 95) if at.any() else None
+    finite_at = at & np.isfinite(mag)
+    if finite_at.any():
+        seq = df[col["chunk"]].values[1:]
+        worst = int(np.argmax(np.where(finite_at, mag, -np.inf)))
+        out["splice_max"] = round(float(mag[worst]), 1)
+        out["splice_max_seq"] = int(seq[worst])
+    # Command jerk (second difference). d2[i] involves steps d1[i] and
+    # d1[i+1]; it belongs to the splice pool when EITHER touches a chunk
+    # switch — a one-sided mask would leak half of every splice into the
+    # 'within' baseline.
+    with np.errstate(invalid="ignore"):
+        d2 = np.abs(np.diff(d1, axis=0)).max(axis=1) * 1000
+    touches = new_chunk[1:-1] | new_chunk[2:]
+    out["jerk_within_p50"] = _med(d2[~touches])
+    out["jerk_splice_p50"] = _med(d2[touches]) if touches.any() else None
+    # Direction reversals: mean number of arm joints whose command reverses
+    # sign with meaningful magnitude on both sides, splice vs within. "Any
+    # joint reversed" is nearly always true with 14 arm joints, so only the
+    # excess over the within baseline means anything. Same two-sided pooling
+    # as jerk.
+    if at.any():
+        eps = 1e-4
+        prev = d1[:-1]
+        cur = d1[1:]
+        with np.errstate(invalid="ignore"):
+            rev = ((prev * cur) < 0) & (np.abs(prev) > eps) & (np.abs(cur) > eps)
+        rev_n = rev.sum(axis=1).astype(float)
+        rev_n[~(np.isfinite(prev).all(axis=1) & np.isfinite(cur).all(axis=1))] = np.nan
+        if touches.any():
+            out["rev_joints_splice_p50"] = _med(rev_n[touches])
+        out["rev_joints_within_p50"] = _med(rev_n[~touches])
+    # Velocity spike near splices, apples to apples: the same windowed-max
+    # statistic is taken at splices and everywhere, and the ratio of their
+    # medians is reported (max-at-splice over global median would inflate).
+    vel_cols = [f"{col['vel_prefix']}{n}" for n in arm if f"{col['vel_prefix']}{n}" in df.columns]
+    if vel_cols and at.any():
+        with np.errstate(invalid="ignore"):
+            vmag = np.abs(df[vel_cols].values.astype(float)).max(axis=1)
+        w = cfg.splice_window_ticks
+        roll = pd.Series(vmag).rolling(2 * w + 1, center=True, min_periods=1).max().values
+        base = _med(roll)
+        idxs = np.where(new_chunk)[0]
+        idxs = idxs[idxs > 0]
+        spike = _med(roll[idxs]) if len(idxs) else None
+        if base and spike is not None:
+            out["vel_spike_ratio_p50"] = round(spike / base, 2)
+    return out
+
+
+def _grasp_attempts(df, names, t, hi, run_meta: dict | None, cfg: Options) -> dict:
+    """Per finger: every close attempt, with the horizon depth it was issued
+    at, its command rise time (10->90% of the drop — RTC ramping lengthens
+    it), whether it fell inside the configured RTC overlap region, and
+    whether it succeeded (the finger stopped short = held something)."""
+    col = cfg.column_names
+    out: dict = {}
+    overlap = None
+    if isinstance(run_meta, dict) and run_meta.get("rtc_enable"):
+        overlap = run_meta.get("rtc_overlap_steps")
+    for n in [x for x in names if cfg.finger_marker in x]:
+        cmd = df[f"{col['cmd_prefix']}{n}"].values.astype(float)
+        aname = f"{col['act_prefix']}{n}"
+        act = df[aname].values.astype(float) if aname in df.columns else None
+        if len(cmd) < 3:
+            out[n] = []
+            continue
+        lo_v, hi_v = float(np.percentile(cmd, 5)), float(np.percentile(cmd, 95))
+        rng = hi_v - lo_v
+        if rng < 1e-4:
+            out[n] = []
+            continue
+        close_level = lo_v + cfg.grasp_close_frac * rng
+        closed = cmd < close_level
+        f_lo, f_hi = cfg.grasp_rise_fracs
+        lvl_hi = lo_v + f_hi * rng  # 10% into the drop (still nearly open)
+        lvl_lo = lo_v + f_lo * rng  # 90% into the drop (nearly closed)
+        events = []
+        prev_b = -1
+        for a, b in intervals(closed, cfg.merge_ticks, cfg.grasp_min_ticks):
+            # Rise time: walk back to the last tick above lvl_hi, forward to
+            # the first tick below lvl_lo. Both walks are BOUNDED to this
+            # attempt — backward by the previous attempt's end, forward by
+            # this closed span's end — and yield None when the command never
+            # crosses the level inside those bounds (a partial close). An
+            # unbounded walk would inherit a crossing from a different
+            # attempt and report a rise of tens of seconds.
+            s = a
+            while s > prev_b + 1 and cmd[s] < lvl_hi:
+                s -= 1
+            e = a
+            while e < b and cmd[e] > lvl_lo:
+                e += 1
+            rise_ms = (
+                round(float(t[e] - t[s]) * 1000)
+                if e > s and cmd[s] >= lvl_hi and cmd[e] <= lvl_lo
+                else None
+            )
+            success = None
+            if act is not None:
+                blocked = (act[a : b + 1] - cmd[a : b + 1]) > cfg.grasp_gap_frac * rng
+                # A grab late in the span still counts: the success threshold
+                # is deliberately smaller than the span-detection threshold.
+                success = bool(blocked.sum() >= cfg.grasp_success_min_ticks)
+            ev = {
+                "t": round(float(t[a]), 1),
+                # anchored where the close ramp begins, not where it crosses
+                # the closed threshold — the ramp start is what RTC blends
+                "hi": int(hi[s]),
+                "rise_ms": rise_ms,
+                "success": success,
+            }
+            if overlap is not None:
+                ev["in_overlap"] = bool(hi[s] < overlap)
+            events.append(ev)
+            prev_b = b
+        out[n] = events
+    return out
+
+
+def _violation_rates(df, run_meta: dict | None, cfg: Options) -> dict:
+    """Fraction of ticks where the safety guard held a side instead of
+    commanding it. A high rate invalidates that run's smoothness numbers.
+
+    A disabled side is omitted (the client evaluates the limit check even for
+    a parked arm, so its flag is noise), and NaN cells (truncated final row)
+    are dropped rather than poisoning the rate."""
+    col = cfg.column_names
+    out = {}
+    for key, cname, enable in (
+        ("left", col["left_violation"], "enable_left_arm"),
+        ("right", col["right_violation"], "enable_right_arm"),
+    ):
+        if isinstance(run_meta, dict) and run_meta.get(enable) is False:
+            continue
+        s = _opt_series(df, cname)
+        if s is not None:
+            s = s.dropna()
+            if len(s):
+                out[key] = round(float(s.values.astype(float).mean()), 4)
+    return out
