@@ -3,6 +3,7 @@
 Knows nothing about metrics (analysis.py) or looks (template.py).
 """
 
+import json
 from datetime import date
 from pathlib import Path
 from typing import Callable
@@ -10,6 +11,18 @@ from typing import Callable
 from .analysis import process_run
 from .config import DEFAULTS, Options
 from .template import render
+
+
+def load_meta(csv_path: Path, cfg: Options) -> dict | None:
+    """Parse the run's .meta.json sidecar (logger >= v0.4). None when the
+    sidecar is absent or unreadable — older runs must never break the build."""
+    meta_path = csv_path.parent / (csv_path.stem + cfg.meta_suffix)
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 def find_csvs(target: Path) -> list[Path]:
@@ -78,7 +91,7 @@ def build(
         if progress:
             progress(f.name, i + 1, len(csvs))
         try:
-            runs[_unique_key(f.stem, f, runs)] = process_run(f, cfg)
+            runs[_unique_key(f.stem, f, runs)] = process_run(f, cfg, run_meta=load_meta(f, cfg))
         except Exception as exc:  # a bad file skips, never kills the build
             errors.append(f"{f.name}: {exc}")
     if not runs:
