@@ -77,6 +77,16 @@ def estimate_lag(cmd: np.ndarray, act: np.ndarray, max_lag: int) -> int:
     return best_k
 
 
+def _round_list(arr: np.ndarray, decimals: int) -> list:
+    """Array -> JSON-ready list: rounded floats, NaN/inf -> None. Raw traces
+    must never carry a bare NaN token into the page."""
+    out = []
+    for v in arr:
+        v = float(v)
+        out.append(round(v, decimals) if np.isfinite(v) else None)
+    return out
+
+
 def _mrad(value: float) -> float | None:
     """rad -> mrad rounded, mapping NaN to None so it reaches JSON as null,
     never as a bare NaN token."""
@@ -207,6 +217,49 @@ def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> d
                 tr[key] = decimate(t, df[f"{prefix}{n}"].values.astype(float), cfg.buckets)
         run["traces"][n] = tr
     run["stats"] = stats
+
+    # ---- raw arrays for semantic zoom -----------------------------------
+    # The decimated traces above are the far view; zooming needs the real
+    # samples. Position signals (cmd + actual) are stored raw; velocity and
+    # effort stay decimated — they are read as envelopes. A run beyond the
+    # size budget falls back to decimated-only, flagged, instead of producing
+    # an unopenably large page.
+    if len(df) * len(names) * 2 <= cfg.raw_max_points:
+        raw: dict = {
+            "t": [round(float(x), 3) for x in t],
+            "hi": [int(x) for x in hi],
+            "seq": [int(x) for x in seq],
+            "j": {},
+        }
+        for n in names:
+            cmd = df[f"{col['cmd_prefix']}{n}"].values.astype(float)
+            aname = f"{col['act_prefix']}{n}"
+            entry = {"cmd": _round_list(cmd, cfg.raw_decimals)}
+            if aname in df.columns:
+                entry["act"] = _round_list(
+                    df[aname].values.astype(float), cfg.raw_decimals
+                )
+            raw["j"][n] = entry
+        run["raw"] = raw
+        # Per-tick command step (max over arm joints, mrad), full resolution —
+        # the series behind the splice ratio, so the number can be *seen*.
+        # dstep[i] spans t[i] -> t[i+1] and is plotted at t[i+1].
+        arm_cols = [
+            f"{col['cmd_prefix']}{n}" for n in names if cfg.finger_marker not in n
+        ]
+        if arm_cols and len(df) >= 2:
+            with np.errstate(invalid="ignore"):
+                d = np.abs(
+                    np.diff(df[arm_cols].values.astype(float), axis=0)
+                ).max(axis=1) * 1000
+            run["dstep"] = _round_list(d, cfg.dstep_decimals)
+    else:
+        run["raw"] = None
+        run["raw_omitted"] = True
+
+    # seq id at each boundary, parallel to run["bounds"] — lets the page label
+    # boundaries and jump to a chunk number from the tables.
+    run["bound_seq"] = [int(x) for x in seq[new_chunk]]
 
     run["contacts"] = _contacts(df, names, t, cfg)
     run["grasps"] = _grasps(df, names, t, cfg)
