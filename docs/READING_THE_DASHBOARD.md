@@ -60,9 +60,35 @@ runs show "config unknown" — everything else still works.
 
 ---
 
-## 2. The four signal views
+## 2. The five signal views
 
-One panel per joint, full run on the x-axis. Click any panel to enlarge it.
+One panel per joint, full run on the x-axis. Click a panel's **title** to
+enlarge it; the plot area itself is for zooming (next section).
+
+### Zooming — the plots hold every sample
+
+The page embeds the raw command and actual-position arrays, so zooming reveals
+real data, not bigger pixels:
+
+- **scroll** on any plot zooms around the cursor; **drag** pans;
+  **double-click** resets to the full run.
+- The time window is **shared across every panel** (and the enlarged view), so
+  all joints stay aligned while you move around.
+- Detail appears as you go: far out you see today's overview line; closer, the
+  chunk boundaries get labelled with their chunk number and the **splice size
+  in mrad**; closest, every sample becomes a dot with its `horizon_idx`
+  underneath — a chunk starting at 9 instead of 0 makes the prefetch skip
+  directly visible.
+- The x-axis is real time (`t_rel`), so a blocking run's boundary stall shows
+  as a genuine gap between dots, while a prefetch run stays evenly spaced.
+  That contrast is itself diagnostic.
+- **Click any table row that carries a time or chunk number** — a contact, a
+  grasp attempt, the worst splice in Run facts — and the plots jump to that
+  moment.
+
+Velocity and effort are stored decimated (they are read as envelopes), so
+their zoom bottoms out earlier. A very long run past the size budget falls
+back to decimated-only entirely; its chip says "raw omitted".
 
 ### position
 Two raw lines straight from the CSV: **actual** (blue, the encoder) and
@@ -81,6 +107,14 @@ verticals (toggle: *chunk boundaries*) mark where each new chunk began.
 
 A line that sits at a constant offset from zero is **sag** (see §4). A line
 that spikes during motion and returns to zero is **lag**.
+
+### cmd step
+**What the splice ratio is made of.** One full-width panel: `|Δcmd|` per tick
+in mrad — how far the command moved this tick — max over the arm joints
+(fingers excluded, matching how the splice ratio pools it). Inside a chunk it
+is a low band; at a chunk switch it spikes. The dashed green line is the
+within-chunk median, so the splice ratio is literally the height of the
+spikes over that line. Zoom into any spike to see the exact boundary.
 
 ### velocity / effort
 The raw measured streams. Both look noisy — that is the sensor, not the arm:
@@ -144,7 +178,11 @@ not a clean error signal. The dashboard handles this two ways:
 Answers: **do commands get worse the further you are into a chunk?**
 (They execute on an older observation, so they might.)
 
-One row per **observed** `horizon_idx`, median over every chunk in the run.
+Shown as a **plot first** — error (solid) and command step (dashed) against
+`horizon_idx`, compare run overlaid in purple — because the thing being looked
+for is a **knee**: the step where late commands stop being trustworthy. The
+table below it carries the exact numbers. One row per **observed**
+`horizon_idx`, median over every chunk in the run.
 For a blocking run the rows run 0 … N−1; for a prefetch run they start where
 the skip lands (typically 7–12) and reach as deep as execution ever got.
 
@@ -193,6 +231,11 @@ One honest caveat: in a *blocking* run the splice interval spans the ~240 ms
 stall, so its command jump is naturally larger than a 33 ms step — compare
 splice ratios between runs of the same kind, and check `stalls` to know which
 kind a run is.
+
+**Step distribution** — under the facts table, a small histogram pair of
+`|Δcmd|`: within-chunk (teal) vs at-splice (amber). Medians hide spread; this
+shows whether a splice ratio of 3× is a consistent offset (a shifted amber
+hump) or two outliers dragging the number (a long thin tail).
 
 **Safety** — the fraction of ticks where the limit guard held a side instead
 of publishing. A high rate invalidates the run's smoothness numbers: held
