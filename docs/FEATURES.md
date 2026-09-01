@@ -52,6 +52,11 @@ nothing to install for the reader. Light and dark theme follow the system.
   blocking-run stalls appear as real gaps.
 - **Jump links** — contact rows, grasp attempts and the worst-splice entry in
   Run facts move the plots to that moment or chunk.
+- **Hover readouts on every plot** — crosshair plus a tooltip: joint panels give
+  time, each series' value with units, and the chunk/step at that instant (both
+  runs in compare mode); the chunk profile gives the step and its error/command
+  size; the histogram gives the bin range and tick counts; the scatters name the
+  run and its coordinates.
 - **Joint filter** — all / left / right.
 - **Click a panel's title to enlarge it** (the plot area itself zooms/pans);
   the enlarged view shares the same window and interactions.

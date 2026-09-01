@@ -93,6 +93,11 @@ real data, not bigger pixels:
 - **Click any table row that carries a time or chunk number** — a contact, a
   grasp attempt, the worst splice in Run facts — and the plots jump to that
   moment.
+- **Hover anywhere on any plot to read its values.** A crosshair marks the
+  instant and a tooltip gives the numbers: on a joint panel, the time, each
+  line's value with units, and which chunk and step that instant belongs to
+  (both runs at once in compare mode). The chunk-profile, step-distribution
+  and matrix scatter plots report their own values the same way.
 
 Velocity and effort are stored decimated (they are read as envelopes), so
 their zoom bottoms out earlier. A very long run past the size budget falls
@@ -240,10 +245,32 @@ stall, so its command jump is naturally larger than a 33 ms step — compare
 splice ratios between runs of the same kind, and check `stalls` to know which
 kind a run is.
 
-**Step distribution** — under the facts table, a small histogram pair of
-`|Δcmd|`: within-chunk (teal) vs at-splice (amber). Medians hide spread; this
-shows whether a splice ratio of 3× is a consistent offset (a shifted amber
-hump) or two outliers dragging the number (a long thin tail).
+**Step distribution** — the histogram under the facts table. It answers one
+question: *how big are the arm's command steps, and are the ones at chunk
+switches really different?*
+
+Every control tick moves the command some distance (`|Δcmd|`, max over the arm
+joints — the same series the *cmd step* view plots). Sort those ticks into two
+piles: the ones **inside a chunk** (teal) and the ones **at a chunk switch**
+(amber). The x-axis is step size in mrad, up to the 99th percentile; the height
+of each curve is how many ticks fell in that size bin, each curve scaled to its
+own peak so the small amber pile stays visible next to the large teal one.
+
+How to read it:
+
+- **Teal alone, tight and low** — ordinary motion; that hump's position is the
+  arm's normal per-tick step.
+- **Amber sitting on top of teal** — chunk switches move the command no more
+  than an ordinary tick. This is what smooth looks like.
+- **Amber shifted right of teal** — every switch jumps further than a normal
+  step: a consistent splice, exactly what the splice ratio reports.
+- **Amber mostly overlapping but with a long thin tail** — most switches are
+  fine and a few are terrible. The median-based splice ratio would look
+  moderate while the arm still jerks occasionally; this is the case the ratio
+  alone cannot show you.
+
+Hover any bin to see the exact size range and how many ticks of each kind fell
+in it.
 
 **Safety** — the fraction of ticks where the limit guard held a side instead
 of publishing. A high rate invalidates the run's smoothness numbers: held

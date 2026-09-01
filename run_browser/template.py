@@ -104,6 +104,10 @@ tr.jump:hover td{background:var(--accent-soft)}
 .mbox .ttl{font-family:var(--mono);font-size:12px;margin-bottom:6px;display:flex;justify-content:space-between}
 .mbox button{font-family:var(--mono);background:none;border:1px solid var(--hairline);color:var(--ink);border-radius:3px;cursor:pointer;padding:2px 10px}
 .note{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:4px}
+#tip{position:fixed;z-index:30;pointer-events:none;display:none;background:var(--ground);
+  border:1px solid var(--accent);border-radius:3px;padding:4px 7px;font-family:var(--mono);
+  font-size:10.5px;line-height:1.45;color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap}
+#tip b{color:var(--accent);font-weight:600}
 @media (max-width:760px){.layout{flex-direction:column}aside{width:100%;height:auto;position:static;flex:none}}
 </style>
 <div class="layout">
@@ -186,6 +190,7 @@ tr.jump:hover td{background:var(--accent-soft)}
   </div>
 </main>
 </div>
+<div id="tip"></div>
 <div class="modal" id="modal"><div class="mbox">
   <div class="ttl"><span id="mttl"></span><button onclick="closeModal()">close</button></div>
   <div class="panel" style="cursor:default"><canvas id="mcanvas" height="420"></canvas></div>
@@ -409,11 +414,81 @@ function drawPanel(cv,j,big){
     }
   }
   if(ymin<0&&ymax>0){g.strokeStyle=css("--hairline");g.lineWidth=1;g.beginPath();g.moveTo(padL,Y(0));g.lineTo(W0-padR,Y(0));g.stroke()}
+  drawCrosshair(g,cv,padL,padT,iw,ih);
   g.restore();
   g.fillStyle=css("--muted");
   g.fillText(ymax.toFixed(2),2,padT+8); g.fillText(ymin.toFixed(2),2,padT+ih);
   g.fillText(t1.toFixed(t1-t0<5?2:0)+"s",W0-padR-34,H-4); g.fillText(t0.toFixed(t1-t0<5?2:0),padL,H-4);
+
+  // hover readout: nearest sample of each series at the cursor's time
+  const unit=view==="track"?"rad":view==="err"?"mrad":view==="vel"?"rad/s":view==="eff"?"Nm":"mrad";
+  cv._probe=(px,py)=>{
+    if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
+    const tq=t0+(px-padL)/iw*(t1-t0);
+    const lines=[`<b>${short(j)}</b> @ ${tq.toFixed(tq<100?2:1)}s`];
+    let snap=null, any=false;
+    sers.forEach(s2=>{
+      let k=bisect(s2.t,tq); if(k>=s2.t.length)k=s2.t.length-1;
+      if(k>0&&Math.abs(s2.t[k-1]-tq)<Math.abs(s2.t[k]-tq))k--;
+      const v=s2.y[k]; if(v==null)return;
+      any=true; if(snap==null)snap=X(s2.t[k]);
+      const who=(runB?s2.run+" ":"")+(s2.isCmd?"commanded":sers.length>1&&view==="track"?"actual":"value");
+      lines.push(`${who}: <b>${v.toFixed(Math.abs(v)<10?3:1)}</b> ${unit}`);
+    });
+    if(!any)return null;
+    // which chunk this instant belongs to, when the run carries raw indices
+    const R=runs[runA].raw;
+    if(R&&R.seq&&R.t){
+      let k=bisect(R.t,tq); if(k>=R.t.length)k=R.t.length-1;
+      if(k>0&&Math.abs(R.t[k-1]-tq)<Math.abs(R.t[k]-tq))k--;
+      lines.push(`chunk <b>${R.seq[k]}</b> · step <b>${R.hi[k]}</b>`);
+    }
+    return {lines,snapX:snap};
+  };
 }
+// ---------------------------------------------------------------- hover readout
+// Each draw function stashes a probe on its canvas: pixel -> {lines,[x,y]}.
+// One document-level listener turns that into a tooltip plus a crosshair, so
+// every plot on the page reports its values the same way.
+const tip=$("tip");
+let hoverCv=null, hoverPx=null;
+function showTip(e,cv){
+  const probe=cv._probe;
+  if(!probe){tip.style.display="none";return}
+  const rect=cv.getBoundingClientRect();
+  const px=e.clientX-rect.left, py=e.clientY-rect.top;
+  const r=probe(px,py);
+  if(!r){tip.style.display="none"; if(hoverCv){hoverCv=null;scheduleRedraw()} return}
+  tip.innerHTML=r.lines.join("<br>");
+  tip.style.display="block";
+  const tw=tip.offsetWidth, th=tip.offsetHeight;
+  let x=e.clientX+14, y=e.clientY+14;
+  if(x+tw>innerWidth-6)x=e.clientX-tw-14;
+  if(y+th>innerHeight-6)y=e.clientY-th-14;
+  tip.style.left=x+"px"; tip.style.top=y+"px";
+  if(hoverCv!==cv||hoverPx==null||Math.abs(hoverPx-px)>0.5){
+    hoverCv=cv; hoverPx=r.snapX!=null?r.snapX:px; scheduleRedraw();
+  }
+}
+document.addEventListener("pointermove",e=>{
+  const cv=e.target&&e.target.tagName==="CANVAS"?e.target:null;
+  if(!cv||!cv._probe){
+    if(tip.style.display!=="none"){tip.style.display="none"}
+    if(hoverCv){hoverCv=null;scheduleRedraw()}
+    return;
+  }
+  showTip(e,cv);
+});
+document.addEventListener("pointerleave",()=>{tip.style.display="none";
+  if(hoverCv){hoverCv=null;scheduleRedraw()}});
+function drawCrosshair(g,cv,padL,padT,iw,ih){
+  if(hoverCv!==cv||hoverPx==null)return;
+  if(hoverPx<padL||hoverPx>padL+iw)return;
+  g.save();g.strokeStyle=css("--accent");g.globalAlpha=.5;g.lineWidth=1;
+  g.setLineDash([3,3]);g.beginPath();g.moveTo(hoverPx,padT);g.lineTo(hoverPx,padT+ih);
+  g.stroke();g.restore();
+}
+
 function redrawAll(){
   panelReg.forEach(p=>drawPanel(p.cv,p.joint,p.big));
 }
@@ -726,6 +801,19 @@ function drawProfile(){
   g.fillStyle=css("--muted");
   g.fillText(String(Math.round(ymax)),2,padT+8);g.fillText("0",padL-10,padT+ih);
   g.fillText("horizon_idx "+kmin,padL,H-5);g.fillText(String(kmax),W-padR-18,H-5);
+  drawCrosshair(g,cv,padL,padT,iw,ih);
+  cv._probe=(px,py)=>{
+    if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
+    const kq=kmin+(px-padL)/Math.max(iw,1)*Math.max(kmax-kmin,1);
+    let best=null,bd=1e9;
+    ks.forEach(k=>{const d=Math.abs(k-kq); if(d<bd){bd=d;best=k}});
+    if(best==null)return null;
+    const ia=pa.k.indexOf(best), ib=pb?pb.k.indexOf(best):-1;
+    const lines=[`step <b>${best}</b> of the chunk`];
+    if(ia>=0)lines.push(`${runB?esc(runA)+" ":""}error <b>${dash(pa.err[ia])}</b> mrad · cmd step <b>${dash(pa.step[ia])}</b> mrad`);
+    if(ib>=0)lines.push(`${esc(runB)} error <b>${dash(pb.err[ib])}</b> mrad · cmd step <b>${dash(pb.step[ib])}</b> mrad`);
+    return {lines,snapX:X(best)};
+  };
 }
 function drawHist(){
   const cv=$("histcv"); if(!cv||page!=="signals")return;
@@ -762,6 +850,20 @@ function drawHist(){
   if(ba)strip(ba,css("--warn"));
   g.fillStyle=css("--muted");
   g.fillText("0",padL,H-5);g.fillText(Math.round(xmax)+" mrad (p99)",W-padR-70,H-5);
+  drawCrosshair(g,cv,padL,padT,iw,ih);
+  const nW=within.length, nA=at.length;
+  cv._probe=(px,py)=>{
+    if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
+    const bi=Math.min(NB-1,Math.max(0,Math.floor((px-padL)/iw*NB)));
+    const lo=(bi*xmax/NB), hi2=((bi+1)*xmax/NB);
+    const cw=within.filter(v=>v>=lo&&v<hi2).length;
+    const ca=at.filter(v=>v>=lo&&v<hi2).length;
+    return {lines:[
+      `step size <b>${lo.toFixed(1)}–${hi2.toFixed(1)}</b> mrad`,
+      `within chunks: <b>${cw}</b> ticks (${nW?(100*cw/nW).toFixed(1):0}%)`,
+      `at splices: <b>${ca}</b> ticks (${nA?(100*ca/nA).toFixed(1):0}%)`],
+      snapX:X(bi)+iw/NB/2};
+  };
 }
 
 // ------------------------------------------------------------------ matrix
@@ -823,6 +925,14 @@ function scatter(cv,pts,xl,yl,opt){
   g.save();g.translate(10,H/2+20);g.rotate(-Math.PI/2);g.fillText(yl,0,0);g.restore();
   g.fillText(String(Math.round(xmin*10)/10),padL,H-14);g.fillText(String(Math.round(xmax*10)/10),W-padR-24,H-14);
   g.fillText(String(Math.round(ymax*100)/100),2,padT+8);
+  cv._probe=(px,py)=>{
+    let best=null,bd=1e9;
+    data.forEach(p2=>{const d=Math.hypot(X(p2.x)-px,Y(p2.y)-py); if(d<bd){bd=d;best=p2}});
+    if(!best||bd>26)return null;
+    return {lines:[`<b>${esc(best.l)}</b>`,
+      `${xl}: <b>${best.x}</b>`,
+      `${yl}: <b>${Math.round(best.y*1000)/1000}</b>`]};
+  };
 }
 window.addEventListener("resize",()=>render());
 render();
