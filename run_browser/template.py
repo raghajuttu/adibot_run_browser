@@ -52,6 +52,12 @@ h1{font-size:16px;font-weight:800;letter-spacing:-.01em;margin:0 0 2px}
 .runbtn:hover{background:var(--accent-soft)}
 .runbtn.sel{background:var(--accent);color:#fff}
 .runbtn.selB{background:var(--b2);color:#fff}
+.runrow{display:flex;align-items:center;gap:2px}
+.runrow .runbtn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eye{flex:0 0 auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:3px 5px;line-height:1;border-radius:3px}
+.eye:hover{color:var(--accent);background:var(--accent-soft)}
+.runrow.off .runbtn{opacity:.4;text-decoration:line-through}
+.runrow.off .eye{color:var(--warn)}
 select,.seg button{font-family:var(--mono);font-size:11.5px;background:var(--ground);color:var(--ink);border:1px solid var(--hairline);border-radius:3px;padding:4px 6px}
 select{width:100%}
 .seg{display:flex;flex-wrap:wrap;gap:4px}
@@ -133,7 +139,7 @@ tr.jump:hover td{background:var(--accent-soft)}
 <main>
   <div id="pageSignals">
     <div class="chips" id="chips"></div>
-    <div class="sec" data-sec="plots"><h2 class="sechead"><span class="caret">&#9662;</span>Signal plots</h2>
+    <div class="sec" data-sec="plots"><h2 class="sechead"><span class="caret">&#9662;</span><span id="plotsTitle">Commanded vs actual position</span></h2>
       <div class="secbody">
         <div class="legend" id="legend"></div>
         <div class="grid" id="grid"></div>
@@ -195,9 +201,35 @@ let modalJoint=null;       // joint shown in the enlarged modal, or null
 const panelReg=[];         // [{cv, joint, big}] canvases to redraw on viewport change
 const errCache=new Map();  // run|joint -> Float64Array err (mrad) computed from raw
 const dash=v=>(v==null||v==="")?"—":v;
+// Descriptive name for each signal view — used for the section heading and
+// the enlarged-panel title, so the page says what is plotted rather than
+// "signal plots".
+const VIEW_TITLES={
+  track:"Commanded vs actual position (rad)",
+  err:"Tracking error — commanded minus actual (mrad)",
+  vel:"Measured joint velocity (rad/s)",
+  eff:"Measured joint effort (Nm)",
+  dcmd:"Command step per tick — |Δcmd|, max over arm joints (mrad)"};
+// Runs hidden from the sidebar, matrix and compare list. Persisted per browser.
+let hiddenRuns={};
+try{hiddenRuns=JSON.parse(localStorage.getItem("rb_hidden")||"{}")||{}}catch(e){}
+const visibleNames=()=>names.filter(n=>!hiddenRuns[n]);
+function setHidden(n,off){
+  if(off&&visibleNames().length<=1)return;          // never hide the last run
+  if(off)hiddenRuns[n]=1; else delete hiddenRuns[n];
+  try{localStorage.setItem("rb_hidden",JSON.stringify(hiddenRuns))}catch(e){}
+  if(hiddenRuns[runA]){runA=visibleNames()[0];vp=null}
+  if(hiddenRuns[runB])runB="";
+  render();
+}
 const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const $=id=>document.getElementById(id);
-$("gen").textContent=names.length+" run"+(names.length===1?"":"s")+" · built "+DATA.generated;
+function updateGen(){
+  const h=names.length-visibleNames().length;
+  $("gen").textContent=names.length+" run"+(names.length===1?"":"s")
+    +(h?" · "+h+" hidden":"")+" · built "+DATA.generated;
+}
+updateGen();
 
 function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
 function joints(){
@@ -443,22 +475,32 @@ function closeModal(){
 function openModal(j){
   modalJoint=j;
   $("modal").classList.add("on");
-  $("mttl").textContent=short(j)+" — "+view;
+  $("mttl").textContent=short(j)+" — "+(VIEW_TITLES[view]||view);
   panelReg.push({cv:$("mcanvas"),joint:j,big:true});
   requestAnimationFrame(()=>drawPanel($("mcanvas"),j,true));
 }
 
 // ---------------------------------------------------------------- sidebar
 function buildSidebar(){
+  updateGen();
   const rl=$("runlist"); rl.innerHTML="";
   names.forEach(n=>{
+    const off=!!hiddenRuns[n];
+    const row=document.createElement("div");
+    row.className="runrow"+(off?" off":"");
     const b=document.createElement("button");
     b.className="runbtn"+(n===runA?" sel":"")+(n===runB?" selB":"");
-    b.textContent=n; b.onclick=()=>{if(runA!==n){runA=n;vp=null} if(runB===n)runB=""; render()};
-    rl.appendChild(b);
+    b.textContent=n; b.title=n;
+    b.onclick=()=>{if(off){setHidden(n,false);return}
+      if(runA!==n){runA=n;vp=null} if(runB===n)runB=""; render()};
+    const eye=document.createElement("button");
+    eye.className="eye"; eye.textContent=off?"+":"×";
+    eye.title=off?"show this run":"hide this run";
+    eye.onclick=e=>{e.stopPropagation(); setHidden(n,!off)};
+    row.appendChild(b); row.appendChild(eye); rl.appendChild(row);
   });
   const cs=$("cmpsel"); cs.innerHTML='<option value="">&mdash; none &mdash;</option>';
-  names.filter(n=>n!==runA).forEach(n=>{
+  visibleNames().filter(n=>n!==runA).forEach(n=>{
     const o=document.createElement("option"); o.value=n; o.textContent=n;
     if(n===runB)o.selected=true; cs.appendChild(o);
   });
@@ -532,6 +574,7 @@ function render(){
   document.querySelectorAll("#views button").forEach(b=>b.classList.toggle("on",b.dataset.v===view));
   document.querySelectorAll("#sides button").forEach(b=>b.classList.toggle("on",b.dataset.s===side));
   document.querySelectorAll("#pages button").forEach(b=>b.classList.toggle("on",b.dataset.p===page));
+  $("plotsTitle").textContent=VIEW_TITLES[view]||view;
   $("pageSignals").style.display=page==="signals"?"":"none";
   $("pageMatrix").style.display=page==="matrix"?"":"none";
   if(page==="matrix"){renderMatrix();return}
@@ -738,7 +781,7 @@ function renderMatrix(){
     ["limit %",r=>{const v=r.violations||{};return (v.left!=null||v.right!=null)?(100*Math.max(v.left||0,v.right||0)).toFixed(1):"—"}],
   ];
   let h="<table><tr>"+cols.map(c=>`<th${c[0]==="run"?"":' class="r"'}>${c[0]}</th>`).join("")+"<th>verdicts</th></tr>";
-  names.forEach(n=>{
+  visibleNames().forEach(n=>{
     const r={...runs[n],name:n};
     h+="<tr>"+cols.map((c,i)=>`<td${i?' class="r"':""}>${c[1](r)}</td>`).join("");
     const vs=verdicts(runs[n]);
@@ -746,8 +789,8 @@ function renderMatrix(){
   });
   $("matrixbox").innerHTML=h+"</table>";
   requestAnimationFrame(()=>{
-    scatter($("sc1"),names.map(n=>({x:(runs[n].schedule||{}).cycle_p50,y:(runs[n].smooth||{}).splice_ratio,l:n})),"cycle p50 (steps)","splice ratio",{hline:V_SPLICE});
-    scatter($("sc2"),names.map(n=>{const g=graspSummary(runs[n]);return {x:(runs[n].schedule||{}).depth_p95,y:g.att?g.succ/g.att:null,l:n}}),"depth p95 (steps)","grasp success rate",{vline:V_DEPTH,ymax:1});
+    scatter($("sc1"),visibleNames().map(n=>({x:(runs[n].schedule||{}).cycle_p50,y:(runs[n].smooth||{}).splice_ratio,l:n})),"cycle p50 (steps)","splice ratio",{hline:V_SPLICE});
+    scatter($("sc2"),visibleNames().map(n=>{const g=graspSummary(runs[n]);return {x:(runs[n].schedule||{}).depth_p95,y:g.att?g.succ/g.att:null,l:n}}),"depth p95 (steps)","grasp success rate",{vline:V_DEPTH,ymax:1});
   });
 }
 function scatter(cv,pts,xl,yl,opt){

@@ -63,7 +63,15 @@ runs show "config unknown" — everything else still works.
 ## 2. The five signal views
 
 One panel per joint, full run on the x-axis. Click a panel's **title** to
-enlarge it; the plot area itself is for zooming (next section).
+enlarge it; the plot area itself is for zooming (next section). The section
+heading always names what is currently plotted and its units, so it reads
+"Measured joint effort (Nm)" rather than a generic label.
+
+**Hiding runs.** Each run in the sidebar has a **×** that removes it from the
+compare list, the run matrix and the scatter plots — useful when a folder holds
+smoke tests or aborted attempts you do not want skewing a comparison. The row
+stays greyed with a **+** to restore it (clicking the name works too), the
+choice persists between visits, and the last visible run cannot be hidden.
 
 ### Zooming — the plots hold every sample
 

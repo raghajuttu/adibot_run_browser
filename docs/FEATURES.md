@@ -33,7 +33,14 @@ nothing to install for the reader. Light and dark theme follow the system.
 - **Run switcher** — every CSV becomes a run in the sidebar; one click swaps
   the entire page. Duplicate filenames from different folders are
   disambiguated, never silently merged.
-- **Five signal views** — position (commanded + actual), error, velocity,
+- **Hide runs** — the × beside a run removes it from the compare list, the run
+  matrix and both scatter plots; the row stays greyed in the sidebar with a +
+  to bring it back (clicking its name restores it too). Hidden runs persist
+  per browser, the header counts them, and the last visible run cannot be
+  hidden.
+- **Five signal views**, each naming what it plots in the section heading
+  ("Commanded vs actual position (rad)", "Tracking error — commanded minus
+  actual (mrad)", and so on) — position (commanded + actual), error, velocity,
   effort, and **cmd step** (per-tick `|Δcmd|` max over arm joints — the series
   behind the splice ratio, with the within-chunk median as a reference line).
 - **Semantic zoom** — the page embeds the raw cmd/actual samples (size-guarded
