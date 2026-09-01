@@ -108,7 +108,12 @@ def _pct(x, q) -> float | None:
 
 
 # ---------------------------------------------------------------- per-run work
-def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> dict:
+def process_run(
+    csv_path: Path,
+    cfg: Options,
+    run_meta: dict | None = None,
+    chunk_data: dict | None = None,
+) -> dict:
     """Everything the dashboard shows for one run, as one JSON-ready dict.
 
     run_meta is the parsed .meta.json sidecar (None for pre-v0.4 logs); it is
@@ -269,6 +274,7 @@ def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> d
     run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
     run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
     run["violations"] = _violation_rates(df, run_meta, cfg)
+    run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg)
     return run
 
 
@@ -656,4 +662,126 @@ def _violation_rates(df, run_meta: dict | None, cfg: Options) -> dict:
             s = s.dropna()
             if len(s):
                 out[key] = round(float(s.values.astype(float).mean()), 4)
+    return out
+
+
+# ------------------------------------------------- full-chunk overlap metrics
+def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Options) -> dict | None:
+    """Metrics that need the UNEXECUTED part of each chunk (<run>.chunks.npz).
+
+    Alignment needs no extra bookkeeping: the CSV anchors each chunk in time.
+    From chunk c's first executed row (t_first, hi_first), its step i — executed
+    or not — targets t_first + (i - hi_first) * tick. Two consecutive chunks
+    therefore describe a shared stretch of instants, and their disagreement
+    over that whole overlap is the true splice number the executed-only
+    boundary step approximates.
+
+    Returns None when no chunk file was recorded (pre-chunk-logging runs).
+    """
+    col = cfg.column_names
+    if chunk_data is None or len(df) < 2 or tick_ms <= 0:
+        return None
+    names = [c[len(col["cmd_prefix"]):] for c in df.columns if c.startswith(col["cmd_prefix"])]
+    arm_idx = [k for k, n in enumerate(names) if cfg.finger_marker not in n]
+    chunks = chunk_data["chunks"]
+    if not arm_idx or chunks.shape[2] < len(names):
+        return None
+    cseq = chunk_data["seq"].astype(int)
+    by_seq = {int(sq): k for k, sq in enumerate(cseq)}
+
+    # Anchor each executed chunk: time of step 0 = t_first - hi_first * tick.
+    starts = np.where(new_chunk)[0]
+    anchor = {}
+    for si in starts:
+        anchor[int(seq[si])] = float(t[si]) - float(hi[si]) * tick_ms / 1000.0
+
+    tick_s = tick_ms / 1000.0
+    pair_med, pair_seq = [], []
+    frozen_mm = []
+    frozen_steps = None
+    if isinstance(run_meta, dict) and run_meta.get("rtc_enable"):
+        frozen_steps = run_meta.get("rtc_frozen_steps")
+
+    exec_seqs = sorted(anchor)
+    for a_sq, b_sq in zip(exec_seqs[:-1], exec_seqs[1:]):
+        ka, kb = by_seq.get(a_sq), by_seq.get(b_sq)
+        if ka is None or kb is None:
+            continue
+        ca, cb = chunks[ka], chunks[kb]
+        # offset in steps between the two chunks' anchors
+        off = (anchor[b_sq] - anchor[a_sq]) / tick_s
+        o = int(round(off))
+        if abs(off - o) > 0.35 or o <= 0:
+            continue  # anchors don't align to the tick grid (stall wobble)
+        n = min(ca.shape[0] - o, cb.shape[0])
+        if n < 3:
+            continue
+        d = np.abs(ca[o : o + n][:, arm_idx] - cb[:n][:, arm_idx]) * 1000.0
+        valid = np.isfinite(d).any(axis=1)
+        if not valid.any():
+            continue
+        with np.errstate(invalid="ignore"):
+            dmax = np.nanmax(d[valid], axis=1)
+        dmax = dmax[np.isfinite(dmax)]
+        if not len(dmax):
+            continue
+        pair_med.append(float(np.median(dmax)))
+        pair_seq.append(int(b_sq))
+        if frozen_steps:
+            m = min(int(frozen_steps), n)
+            fz = np.abs(ca[o : o + m][:, arm_idx] - cb[:m][:, arm_idx]) * 1000.0
+            fv = np.isfinite(fz).any(axis=1)
+            if fv.any():
+                with np.errstate(invalid="ignore"):
+                    v = np.nanmedian(np.nanmax(fz[fv], axis=1))
+                if np.isfinite(v):
+                    frozen_mm.append(float(v))
+
+    out: dict = {"pairs": len(pair_med)}
+    if pair_med:
+        arr = np.asarray(pair_med)
+        out["disagree_p50"] = round(float(np.median(arr)), 1)
+        out["disagree_p95"] = _pct(arr, 95)
+        worst = int(np.argmax(arr))
+        out["disagree_max"] = round(float(arr[worst]), 1)
+        out["disagree_max_seq"] = pair_seq[worst]
+    if frozen_mm:
+        out["rtc_frozen_mismatch_p50"] = round(float(np.median(frozen_mm)), 1)
+
+    # Discarded-tail quality: unexecuted steps vs what was ACTUALLY commanded
+    # at those instants (from the CSV), aggregated by horizon_idx.
+    cmd_all = df[[f"{col['cmd_prefix']}{n}" for n in names]].values.astype(float)
+    tail_err: dict[int, list] = {}
+    # deepest executed horizon_idx per chunk (rows are in order, so the last
+    # row of each chunk wins)
+    exec_depth: dict[int, int] = {}
+    for i in range(len(df)):
+        exec_depth[int(seq[i])] = int(hi[i])
+    for sq, kk in by_seq.items():
+        if sq not in anchor:
+            continue
+        depth = exec_depth.get(sq, -1)
+        ch = chunks[kk]
+        for step in range(depth + 1, ch.shape[0]):
+            ti = anchor[sq] + step * tick_s
+            # map through real time (not row index) so stalls don't misalign
+            j = np.searchsorted(t, ti)
+            if j >= len(t):
+                break
+            if j > 0 and abs(t[j - 1] - ti) < abs(t[j] - ti):
+                j -= 1
+            if abs(float(t[j]) - ti) > 0.6 * tick_s:
+                continue
+            pred = ch[step][arm_idx]
+            actual_cmd = cmd_all[j][arm_idx]
+            with np.errstate(invalid="ignore"):
+                e = np.nanmax(np.abs(pred - actual_cmd)) * 1000.0
+            if np.isfinite(e):
+                tail_err.setdefault(step, []).append(float(e))
+    if tail_err:
+        ks = sorted(tail_err)
+        out["tail"] = {"k": ks,
+                       "err": [round(float(np.median(tail_err[k])), 1) for k in ks]}
+        allv = [v for vs in tail_err.values() for v in vs]
+        out["tail_err_p50"] = round(float(np.median(allv)), 1)
     return out
