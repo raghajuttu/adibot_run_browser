@@ -746,6 +746,11 @@ function renderTables(){
   fh+=row("cmd step within / at splice (mrad)",sm.step_within_p50!=null?`${sm.step_within_p50} / ${dash(sm.step_splice_p50)}`:null);
   fh+=row("splice ratio",sm.splice_ratio!=null?`×${sm.splice_ratio}${sm.splice_ratio>=V_SPLICE?" ⚠":""}${runs[runA].meta.stalled_run?" (spans a stall — compare with blocking runs only)":""}`:null);
   fh+=row("splice p95 / max (mrad)",sm.splice_p95!=null?`${sm.splice_p95} / ${sm.splice_max} (chunk ${sm.splice_max_seq})`:null,sm.splice_max_seq);
+  const ov=runs[runA].overlap||{};
+  fh+=row("chunk overlap disagreement p50/p95 (mrad)",ov.disagree_p50!=null?`${ov.disagree_p50} / ${dash(ov.disagree_p95)} over ${ov.pairs} pairs`:null);
+  fh+=row("worst overlap disagreement (mrad)",ov.disagree_max!=null?`${ov.disagree_max} (chunk ${ov.disagree_max_seq})`:null,ov.disagree_max_seq);
+  fh+=row("RTC frozen-region mismatch (mrad)",ov.rtc_frozen_mismatch_p50);
+  fh+=row("discarded-tail error vs later cmd (mrad)",ov.tail_err_p50);
   fh+=row("cmd jerk within / at splice",sm.jerk_within_p50!=null?`${sm.jerk_within_p50} / ${dash(sm.jerk_splice_p50)}`:null);
   fh+=row("reversing joints at splice / within (median)",sm.rev_joints_splice_p50!=null?`${sm.rev_joints_splice_p50} / ${dash(sm.rev_joints_within_p50)}`:null);
   fh+=row("velocity spike at splice (×median)",sm.vel_spike_ratio_p50);
@@ -778,10 +783,12 @@ function drawProfile(){
   const padL=36,padR=8,padT=8,padB=18,iw=W-padL-padR,ih=H-padT-padB;
   g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
   const pa=runs[runA].profile, pb=runB?runs[runB].profile:null;
-  const ks=[...new Set([...pa.k,...(pb?pb.k:[])])].sort((a,b)=>a-b);
+  const tail=(runs[runA].overlap||{}).tail||null;
+  const ks=[...new Set([...pa.k,...(pb?pb.k:[]),...(tail?tail.k:[])])].sort((a,b)=>a-b);
   if(!ks.length){g.fillText("no profile",padL,H/2);return}
   let ymax=1;
   [pa,pb].forEach(p=>{if(p)p.err.concat(p.step).forEach(v=>{if(v!=null&&v>ymax)ymax=v})});
+  if(tail)tail.err.forEach(v=>{if(v!=null&&v>ymax)ymax=v});
   ymax*=1.1;
   const kmin=ks[0],kmax=ks[ks.length-1]||1;
   const X=k=>padL+iw*(k-kmin)/Math.max(kmax-kmin,1), Y=v=>padT+ih*(1-v/ymax);
@@ -798,6 +805,15 @@ function drawProfile(){
   line(pa,"step",css("--accent"),true);
   line(pb,"err",css("--b2"),false);
   line(pb,"step",css("--b2"),true);
+  if(tail){
+    g.strokeStyle=css("--warn");g.lineWidth=1.3;g.setLineDash([2,3]);
+    g.beginPath();let st2=false;
+    tail.k.forEach((k,i)=>{const v=tail.err[i]; if(v==null){st2=false;return}
+      const x=X(k),y=Y(v); st2?g.lineTo(x,y):g.moveTo(x,y); st2=true});
+    g.stroke();g.setLineDash([]);
+    g.fillStyle=css("--warn");
+    g.fillText("unexecuted tail vs later cmd",padL+4,padT+10);
+  }
   g.fillStyle=css("--muted");
   g.fillText(String(Math.round(ymax)),2,padT+8);g.fillText("0",padL-10,padT+ih);
   g.fillText("horizon_idx "+kmin,padL,H-5);g.fillText(String(kmax),W-padR-18,H-5);
@@ -812,6 +828,8 @@ function drawProfile(){
     const lines=[`step <b>${best}</b> of the chunk`];
     if(ia>=0)lines.push(`${runB?esc(runA)+" ":""}error <b>${dash(pa.err[ia])}</b> mrad · cmd step <b>${dash(pa.step[ia])}</b> mrad`);
     if(ib>=0)lines.push(`${esc(runB)} error <b>${dash(pb.err[ib])}</b> mrad · cmd step <b>${dash(pb.step[ib])}</b> mrad`);
+    if(tail){const it=tail.k.indexOf(best);
+      if(it>=0&&tail.err[it]!=null)lines.push(`tail vs later cmd: <b>${tail.err[it]}</b> mrad`)}
     return {lines,snapX:X(best)};
   };
 }
@@ -876,6 +894,7 @@ function renderMatrix(){
     ["skip p50",r=>dash((r.schedule||{}).skip_p50)],
     ["depth p95",r=>dash((r.schedule||{}).depth_p95)],
     ["splice ×",r=>dash((r.smooth||{}).splice_ratio)],
+    ["overlap mrad",r=>dash((r.overlap||{}).disagree_p50)],
     ["stalls",r=>dash((r.schedule||{}).stall_count)],
     ["eff Hz",r=>dash((r.schedule||{}).effective_hz)],
     ["grasp ✓/att",r=>{const g=graspSummary(r);return g.att?`${g.succ}/${g.att}`:"—"}],
