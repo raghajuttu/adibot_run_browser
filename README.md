@@ -6,8 +6,10 @@ individual CSV files), press **Build dashboard**, and a self-contained HTML
 page opens in your browser — every run, every joint, every signal, plus the
 derived tables (tracking error, contact events, grasps, chunk profile).
 The plots hold the raw samples: scroll to zoom into any moment — down to one
-dot per control tick with its place-in-chunk underneath — drag to pan, and
-click a contact or grasp in the tables to jump straight to it.
+dot per control tick with its place-in-chunk underneath — drag to pan, hover
+to read exact values, and click a contact or grasp in the tables to jump
+straight to it. Every section can be collapsed, and runs you do not want in a
+comparison can be hidden.
 
 No server, no internet, no dependencies beyond Python + numpy + pandas.
 The generated page is a single file you can copy anywhere or send to a
@@ -166,6 +168,8 @@ that expired in flight are skipped — is not misread. Client v0.4+ also writes
 four extra columns (`chunk_len`, `skip_steps`, `rtc_applied`, `buffer_len`) and
 a `<run>.meta.json` sidecar holding the run's configuration; both are picked up
 automatically, and runs without them show "config unknown" rather than failing.
+Those come from the deployment client
+[v0.5.0+](https://github.com/raghajuttu/groot_deployment).
 
 ## Documentation
 
