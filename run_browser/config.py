@@ -15,7 +15,24 @@ class Options:
 
     buckets: int = 400
     """Trace decimation: buckets per signal. Min and max of each bucket are kept,
-    so spikes survive. More buckets = smoother curves, bigger file."""
+    so spikes survive. More buckets = smoother curves, bigger file. Used for
+    velocity/effort (read as envelopes) and as the fallback when a run is too
+    large to embed raw."""
+
+    raw_max_points: int = 1_500_000
+    """Semantic zoom stores the RAW command + actual-position arrays so the
+    page can re-decimate at draw time (zooming reveals real samples, not
+    bigger pixels). A run whose ticks x joints x 2 exceeds this budget falls
+    back to decimated-only for that run — the page says so instead of becoming
+    unopenably large. 1.5M points ~= a 45-minute run on 16 joints."""
+
+    raw_decimals: int = 4
+    """Rounding for raw position values (radians). 4 decimals = 0.1 mrad
+    resolution, well below anything the arm can do, and about half the JSON
+    of full doubles."""
+
+    dstep_decimals: int = 1
+    """Rounding for the per-tick command-step series (mrad)."""
 
     open_browser: bool = True
     """Open the generated page in the default browser when the build finishes."""
