@@ -108,6 +108,11 @@ class Options:
     """Sidecar filename: <run>.csv -> <run>.meta.json (logger >= v0.4). Holds
     the run's configuration; runs without one show 'config unknown'."""
 
+    chunks_suffix: str = ".chunks.npz"
+    """Full-chunk store: <run>.csv -> <run>.chunks.npz (logger with
+    log_chunks, post-v0.5). Holds every action chunk including the unexecuted
+    tail; enables the overlap metrics. Runs without one show '—'."""
+
     # -------------------------------------------------- scheduling / stalls
     stall_gap_ms: float = 100.0
     """A tick interval longer than this counts as a stall. In the old blocking
