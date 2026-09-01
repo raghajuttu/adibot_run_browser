@@ -383,10 +383,30 @@ them on a new model.
 
 ---
 
-## What the CSV cannot tell you
+## 11. Full-chunk metrics (runs with a `.chunks.npz`)
 
-True chunk-to-chunk *disagreement* (how much the new chunk differs from what
-the old one would have done) and verification that RTC's frozen region was
-honored both need the **unexecuted** part of each chunk, which the logger
-does not record. Measuring those would need a per-chunk sidecar with the
-full predicted array (~2.5 KB/chunk) — a logger change, not a dashboard one.
+Clients with `log_chunks` (post-v0.5) write a third file per run holding every
+action chunk **in full** — including the ~24 of 40 steps that are never
+executed. Three measurements become possible, shown in Run facts and on the
+chunk-profile plot; runs without the file show "—".
+
+- **Chunk overlap disagreement** — consecutive chunks describe the *same
+  instants* (each chunk is anchored in time through the CSV), so their
+  difference over the whole shared stretch is the true chunk-to-chunk
+  stability number. The executed-only *splice ratio* sees one step of this;
+  the overlap disagreement sees all ~24. Reported as p50/p95 over all chunk
+  pairs plus the worst pair — click it to jump there.
+- **RTC frozen-region mismatch** — with RTC on, the first `rtc_frozen_steps`
+  of each new chunk should *equal* the previous chunk at those instants.
+  This reports the actual mismatch in mrad; near zero means the server
+  honoured the freeze, anything larger means RTC is not doing what its
+  parameters claim.
+- **Discarded-tail error** — each chunk's unexecuted steps compared against
+  what was *actually commanded* at those instants by later chunks, drawn as
+  the dotted amber line on the chunk-profile plot (by `horizon_idx`, hover
+  for values). Flat and low = the deep tail was still a good prediction, and
+  executing deeper (a larger execution horizon) is safe; rising steeply =
+  the tail is stale guesswork and deeper execution would act on it.
+
+The run matrix gains an **overlap mrad** column so configurations can be
+compared on true stability, not just the one-step splice.

@@ -78,6 +78,17 @@ nothing to install for the reader. Light and dark theme follow the system.
   grasp success, latency, limit-guard rate) with pass/fail verdict chips,
   plus splice-vs-cycle and grasp-success-vs-depth scatter plots.
 
+## Full-chunk metrics (client with log_chunks)
+
+- `<run>.chunks.npz` beside a CSV is picked up automatically; from it the run
+  gains **chunk overlap disagreement** (true stability over the whole shared
+  stretch of consecutive chunks, p50/p95/worst with a jump link), **RTC
+  frozen-region mismatch** (did the server honour the freeze), and the
+  **discarded-tail error** curve on the chunk-profile plot (was the
+  never-executed tail any good — the direct evidence for a deeper execution
+  horizon). The matrix gains an *overlap mrad* column. Runs without the file
+  degrade to "—" as always.
+
 ## Prefetch / RTC awareness (client v0.4+)
 
 - Chunk boundaries come from `inference_seq` changes, so prefetch runs
