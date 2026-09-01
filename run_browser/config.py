@@ -134,6 +134,17 @@ class Options:
     (command falling from 90% open to 10% open). RTC ramping lengthens this —
     it is the 'is RTC smearing the grasp' test."""
 
+    grasp_min_range: float = 0.005
+    """A finger whose commanded range over the run is below this (rad) is
+    treated as parked: hold/grasp detection is disabled for it. Prevents the
+    blocked-threshold (a fraction of the range) collapsing to noise level."""
+
+    grasp_track_frac: float = 0.25
+    """A finger only gets hold/grasp detection if its median |actual - cmd|
+    is below this fraction of its range — i.e. it demonstrably follows its
+    command when free. A disabled or unpowered gripper ignores commands, and
+    the resulting gap would otherwise be shaded as 'holding an object'."""
+
     grasp_success_min_ticks: int = 3
     """Blocked ticks inside a closed span needed to call the grasp a success.
     Smaller than grasp_min_ticks so an object grabbed late in the span still

@@ -263,6 +263,7 @@ def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> d
 
     run["contacts"] = _contacts(df, names, t, cfg)
     run["grasps"] = _grasps(df, names, t, cfg)
+    run["finger_status"] = _finger_status(df, names, cfg)
     run["profile"] = _chunk_profile(df, names, hi, new_chunk, cfg)
     run["schedule"] = _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg)
     run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
@@ -299,8 +300,40 @@ def _contacts(df, names, t, cfg: Options) -> list[dict]:
     return sorted(out, key=lambda e: e["t"])
 
 
+def _finger_usable(cmd: np.ndarray, act: np.ndarray, cfg: Options) -> tuple[bool, str, float]:
+    """Can "commanded shut but stopped short" mean anything for this finger?
+
+    Two ways it cannot, both present in real logs:
+
+    * the finger was never commanded to move (a parked or disabled side), so
+      the range is ~0 and the blocked-threshold — a FRACTION of that range —
+      collapses to sensor noise; and
+    * the finger does not follow its command at all (unpowered / disabled
+      gripper): actual sits wherever it sits, the gap to the command is
+      permanent, and shading it as "holding an object" is simply wrong.
+
+    Returns (usable, reason_if_not, range).
+    """
+    with np.errstate(invalid="ignore"):
+        rng = float(np.nanpercentile(cmd, 95) - np.nanpercentile(cmd, 5))
+    if not np.isfinite(rng) or rng < cfg.grasp_min_range:
+        return False, "gripper parked (command never moves)", max(rng, 0.0)
+    with np.errstate(invalid="ignore"):
+        typical_gap = float(np.nanmedian(np.abs(act - cmd)))
+    if not np.isfinite(typical_gap):
+        return False, "no position feedback", rng
+    if typical_gap > cfg.grasp_track_frac * rng:
+        return False, "gripper does not follow its command (disabled?)", rng
+    return True, "", rng
+
+
 def _grasps(df, names, t, cfg: Options) -> dict:
-    """Blocked-finger spans per finger joint: commanded shut, stopped short."""
+    """Blocked-finger spans per finger joint: commanded shut, stopped short.
+
+    Only for fingers that demonstrably track their command (see
+    _finger_usable) — otherwise a permanently-ignored command would be shaded
+    as a held object for the whole run.
+    """
     col = cfg.column_names
     out = {}
     for n in [x for x in names if cfg.finger_marker in x]:
@@ -312,11 +345,37 @@ def _grasps(df, names, t, cfg: Options) -> dict:
         if len(cmd) == 0:
             out[n] = []
             continue
-        rng = max(float(np.percentile(cmd, 95) - np.percentile(cmd, 5)), 1e-4)
+        usable, _, rng = _finger_usable(cmd, act, cfg)
+        if not usable:
+            out[n] = []
+            continue
         spans = intervals(
             (act - cmd) > cfg.grasp_gap_frac * rng, cfg.merge_ticks, cfg.grasp_min_ticks
         )
         out[n] = [[round(float(t[a]), 1), round(float(t[b]), 1)] for a, b in spans]
+    return out
+
+
+def _finger_status(df, names, cfg: Options) -> dict:
+    """Per finger: whether hold/grasp detection applies, and if not, why.
+
+    The page shows this instead of silently drawing nothing, so an empty
+    grasp list is never mistaken for "the gripper never grabbed anything".
+    """
+    col = cfg.column_names
+    out = {}
+    for n in [x for x in names if cfg.finger_marker in x]:
+        aname = f"{col['act_prefix']}{n}"
+        if aname not in df.columns:
+            out[n] = "no position feedback"
+            continue
+        cmd = df[f"{col['cmd_prefix']}{n}"].values.astype(float)
+        act = df[aname].values.astype(float)
+        if len(cmd) == 0:
+            out[n] = "no data"
+            continue
+        usable, reason, _ = _finger_usable(cmd, act, cfg)
+        out[n] = "" if usable else reason
     return out
 
 
@@ -522,9 +581,13 @@ def _grasp_attempts(df, names, t, hi, run_meta: dict | None, cfg: Options) -> di
             continue
         lo_v, hi_v = float(np.percentile(cmd, 5)), float(np.percentile(cmd, 95))
         rng = hi_v - lo_v
-        if rng < 1e-4:
+        if rng < cfg.grasp_min_range:
             out[n] = []
             continue
+        # Same usability gate as _grasps: a finger that ignores its command
+        # cannot have its held/air outcome judged from the command gap.
+        if act is not None and not _finger_usable(cmd, act, cfg)[0]:
+            act = None
         close_level = lo_v + cfg.grasp_close_frac * rng
         closed = cmd < close_level
         f_lo, f_hi = cfg.grasp_rise_fracs

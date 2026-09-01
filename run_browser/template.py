@@ -598,14 +598,16 @@ function renderTables(){
   let gh="";
   const fingers=Object.keys(gr);
   if(!fingers.length)gh="<div class='note'>no gripper columns</div>";
+  const fstat=runs[runA].finger_status||{};
   fingers.forEach(n=>{
-    const sp=gr[n];
-    gh+=`<div class="note">${short(n)} held: ${sp.length?sp.map(([a,b])=>`<a href="#" data-t="${a}" class="jl">${a}–${b}s</a>`).join(", "):"never"}</div>`;
+    const sp=gr[n], why=fstat[n];
+    if(why){gh+=`<div class="note">${short(n)}: <span style="color:var(--warn)">not measured</span> — ${esc(why)}</div>`}
+    else gh+=`<div class="note">${short(n)} held: ${sp.length?sp.map(([a,b])=>`<a href="#" data-t="${a}" class="jl">${a}–${b}s</a>`).join(", "):"never"}</div>`;
   });
   const ge=runs[runA].grasp_events||{};
   Object.keys(ge).forEach(n=>{
     ge[n].forEach(e=>{
-      const ok=e.success==null?"?":(e.success?"✓ held":"✗ air");
+      const ok=e.success==null?"outcome not measurable":(e.success?"✓ held":"✗ air");
       const ov=e.in_overlap==null?"":(e.in_overlap?" · in RTC overlap":" · outside overlap");
       gh+=`<div class="note"><a href="#" data-t="${e.t}" class="jl">${short(n)} close @ ${e.t}s</a> · step ${e.hi} · rise ${dash(e.rise_ms)}ms · ${ok}${ov}</div>`;
     });

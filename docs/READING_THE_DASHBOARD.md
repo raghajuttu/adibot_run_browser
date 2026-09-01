@@ -276,6 +276,16 @@ For each gripper finger: the time spans where the finger was **commanded
 closed but stopped short** — meaning an object was physically blocking it.
 Shown as green shading on the finger panels and as time ranges in the table.
 
+**The shading only appears for a finger that demonstrably follows its
+command.** A disabled or unpowered gripper ignores commands entirely, so the
+gap between commanded and actual is permanent — shading that would claim the
+hand held something for the whole run. Likewise a finger whose command never
+moves (a parked side) has no meaningful range to measure a gap against. In
+both cases the panel is left unshaded and the Grasps list says *not measured*
+with the reason, so an empty result is never mistaken for "it never grabbed
+anything". Close attempts on such a finger still appear, with *outcome not
+measurable* instead of held/air.
+
 This reconstructs the task storyline from the log alone: when the object was
 picked, how long it was carried, when both hands held it (a handoff), when it
 was released — or that a grasp closed on air. No video needed.
