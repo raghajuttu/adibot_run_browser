@@ -33,10 +33,21 @@ nothing to install for the reader. Light and dark theme follow the system.
 - **Run switcher** — every CSV becomes a run in the sidebar; one click swaps
   the entire page. Duplicate filenames from different folders are
   disambiguated, never silently merged.
-- **Four signal views** — position (commanded + actual), error, velocity,
-  effort. Raw data, full timeline; min/max decimation preserves spikes.
+- **Five signal views** — position (commanded + actual), error, velocity,
+  effort, and **cmd step** (per-tick `|Δcmd|` max over arm joints — the series
+  behind the splice ratio, with the within-chunk median as a reference line).
+- **Semantic zoom** — the page embeds the raw cmd/actual samples (size-guarded
+  in `config.py`; oversize runs fall back to decimated, flagged on the chip)
+  and re-decimates at draw time. Scroll to zoom, drag to pan, double-click to
+  reset; the window is shared across all panels so joints stay time-aligned.
+  Levels of detail as you close in: chunk labels with splice sizes in mrad,
+  then one dot per sample with its `horizon_idx` underneath. X is `t_rel`, so
+  blocking-run stalls appear as real gaps.
+- **Jump links** — contact rows, grasp attempts and the worst-splice entry in
+  Run facts move the plots to that moment or chunk.
 - **Joint filter** — all / left / right.
-- **Click any panel to enlarge.**
+- **Click a panel's title to enlarge it** (the plot area itself zooms/pans);
+  the enlarged view shares the same window and interactions.
 - **Overlays** — chunk-boundary markers and grasp shading, each toggleable.
 - **Compare mode** — overlay any second run dashed, with side-by-side
   tracking and chunk-profile tables (handles runs with different execution
@@ -45,6 +56,11 @@ nothing to install for the reader. Light and dark theme follow the system.
   smoothness, safety), chunk profile, contact events, grasp spans and close
   attempts. See [READING_THE_DASHBOARD.md](READING_THE_DASHBOARD.md) for how
   to read each.
+- **Chunk-profile plot** — error and command step vs `horizon_idx` as curves
+  (compare run overlaid), so the knee where late steps degrade is visible at
+  a glance; the exact numbers stay in the table below it.
+- **Step distribution strip** — within-chunk vs at-splice `|Δcmd|` histograms,
+  showing whether a splice ratio is a consistent offset or a few outliers.
 - **Run matrix page** — one row per run: sidecar config beside measured
   behaviour (cycle, skip, depth p95, splice ratio, stalls, effective Hz,
   grasp success, latency, limit-guard rate) with pass/fail verdict chips,
