@@ -79,7 +79,16 @@ td.hi{color:var(--warn);font-weight:600}
 tr.jump{cursor:pointer}
 tr.jump:hover td{background:var(--accent-soft)}
 .cols{display:flex;gap:26px;flex-wrap:wrap}
-.cols>div{flex:1;min-width:300px}
+.cols>div{flex:1 1 340px;min-width:0}
+.scrollbox{overflow-x:auto;max-width:100%}
+#factsbox td{white-space:normal}
+#factsbox td.r{white-space:normal;word-break:break-word}
+.sec{margin:0 0 6px}
+.sechead{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px}
+.sechead .caret{font-size:10px;color:var(--muted);transition:transform .12s;display:inline-block}
+.sec.collapsed .caret{transform:rotate(-90deg)}
+.sec.collapsed .secbody{display:none}
+.sechead:hover .caret{color:var(--accent)}
 .legend{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin:6px 0 10px}
 .legend i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin:0 4px 0 10px}
 .legend .hint{opacity:.75;margin-left:14px}
@@ -124,29 +133,49 @@ tr.jump:hover td{background:var(--accent-soft)}
 <main>
   <div id="pageSignals">
     <div class="chips" id="chips"></div>
-    <div class="legend" id="legend"></div>
-    <div class="grid" id="grid"></div>
+    <div class="sec" data-sec="plots"><h2 class="sechead"><span class="caret">&#9662;</span>Signal plots</h2>
+      <div class="secbody">
+        <div class="legend" id="legend"></div>
+        <div class="grid" id="grid"></div>
+      </div>
+    </div>
     <div class="cols">
-      <div><h2>Tracking (mrad)</h2><div id="statsbox"></div>
-           <h2>Run facts</h2><div id="factsbox"></div>
-           <h2>Step distribution (mrad)</h2>
-           <div class="panel" style="cursor:default"><canvas id="histcv" height="150"></canvas></div>
-           <div class="note">|&Delta;cmd| per tick, within chunks (teal) vs at chunk switches (amber), normalised. Shows whether a splice ratio is a consistent offset or a few outliers.</div></div>
-      <div><h2>Chunk profile</h2>
-           <div class="panel" style="cursor:default"><canvas id="profcv" height="180"></canvas></div>
-           <div class="note" style="margin-bottom:8px">error (solid, offset-corrected) and cmd step (dashed) vs horizon_idx — the knee is where late steps stop being trustworthy. Purple = compare run.</div>
-           <div id="profbox"></div>
-           <h2>Contacts</h2><div id="ctcbox"></div>
-           <h2>Grasps</h2><div id="graspbox"></div></div>
+      <div>
+        <div class="sec" data-sec="tracking"><h2 class="sechead"><span class="caret">&#9662;</span>Tracking (mrad)</h2>
+          <div class="secbody scrollbox" id="statsbox"></div></div>
+        <div class="sec" data-sec="facts"><h2 class="sechead"><span class="caret">&#9662;</span>Run facts</h2>
+          <div class="secbody scrollbox" id="factsbox"></div></div>
+        <div class="sec" data-sec="dist"><h2 class="sechead"><span class="caret">&#9662;</span>Step distribution (mrad)</h2>
+          <div class="secbody">
+            <div class="panel" style="cursor:default"><canvas id="histcv" height="150"></canvas></div>
+            <div class="note">|&Delta;cmd| per tick, within chunks (teal) vs at chunk switches (amber), normalised. Shows whether a splice ratio is a consistent offset or a few outliers.</div>
+          </div></div>
+      </div>
+      <div>
+        <div class="sec" data-sec="profile"><h2 class="sechead"><span class="caret">&#9662;</span>Chunk profile</h2>
+          <div class="secbody">
+            <div class="panel" style="cursor:default"><canvas id="profcv" height="180"></canvas></div>
+            <div class="note" style="margin-bottom:8px">error (solid, offset-corrected) and cmd step (dashed) vs horizon_idx — the knee is where late steps stop being trustworthy. Purple = compare run.</div>
+            <div class="scrollbox" id="profbox"></div>
+          </div></div>
+        <div class="sec" data-sec="contacts"><h2 class="sechead"><span class="caret">&#9662;</span>Contacts</h2>
+          <div class="secbody scrollbox" id="ctcbox"></div></div>
+        <div class="sec" data-sec="grasps"><h2 class="sechead"><span class="caret">&#9662;</span>Grasps</h2>
+          <div class="secbody scrollbox" id="graspbox"></div></div>
+      </div>
     </div>
   </div>
   <div id="pageMatrix" style="display:none">
-    <h2 style="margin-top:0">Run matrix</h2>
-    <div class="note" style="margin-bottom:8px">One row per run: configuration (from the .meta.json sidecar) + measured behaviour. Verdicts: a run failing any chip is not a valid comparison point.</div>
-    <div class="tblwrap" style="overflow-x:auto"><div id="matrixbox"></div></div>
+    <div class="sec" data-sec="matrix"><h2 class="sechead" style="margin-top:0"><span class="caret">&#9662;</span>Run matrix</h2>
+      <div class="secbody">
+        <div class="note" style="margin-bottom:8px">One row per run: configuration (from the .meta.json sidecar) + measured behaviour. Verdicts: a run failing any chip is not a valid comparison point.</div>
+        <div class="tblwrap" style="overflow-x:auto"><div id="matrixbox"></div></div>
+      </div></div>
     <div class="cols" style="margin-top:18px">
-      <div><h2>Splice ratio vs replan cycle</h2><div class="panel" style="cursor:default"><canvas id="sc1" height="260"></canvas></div></div>
-      <div><h2>Grasp success vs executed depth p95</h2><div class="panel" style="cursor:default"><canvas id="sc2" height="260"></canvas></div></div>
+      <div class="sec" data-sec="sc1"><h2 class="sechead"><span class="caret">&#9662;</span>Splice ratio vs replan cycle</h2>
+        <div class="secbody"><div class="panel" style="cursor:default"><canvas id="sc1" height="260"></canvas></div></div></div>
+      <div class="sec" data-sec="sc2"><h2 class="sechead"><span class="caret">&#9662;</span>Grasp success vs executed depth p95</h2>
+        <div class="secbody"><div class="panel" style="cursor:default"><canvas id="sc2" height="260"></canvas></div></div></div>
     </div>
   </div>
 </main>
@@ -439,6 +468,30 @@ document.querySelectorAll("#views button").forEach(b=>b.onclick=()=>{view=b.data
 document.querySelectorAll("#sides button").forEach(b=>b.onclick=()=>{side=b.dataset.s; render()});
 document.querySelectorAll("#pages button").forEach(b=>b.onclick=()=>{page=b.dataset.p; render()});
 $("cbBounds").onchange=scheduleRedraw; $("cbGrasp").onchange=scheduleRedraw;
+
+// ---- collapsible sections: click any heading to hide/show its content ----
+// Collapsed set persists per browser (best effort — private windows etc. may
+// refuse storage, in which case toggling still works for the session).
+let collapsed = {};
+try { collapsed = JSON.parse(localStorage.getItem("rb_collapsed") || "{}") || {}; } catch (e) {}
+function applyCollapsed(){
+  document.querySelectorAll(".sec").forEach(el=>{
+    el.classList.toggle("collapsed", !!collapsed[el.dataset.sec]);
+  });
+}
+document.addEventListener("click", e=>{
+  const head = e.target.closest(".sechead");
+  if (!head) return;
+  const sec = head.parentElement;
+  const key = sec.dataset.sec;
+  collapsed[key] = !collapsed[key];
+  try { localStorage.setItem("rb_collapsed", JSON.stringify(collapsed)); } catch (err) {}
+  sec.classList.toggle("collapsed", !!collapsed[key]);
+  // Canvases inside a hidden section have zero width; re-render on expand so
+  // plots draw at their real size.
+  if (!collapsed[key]) render();
+});
+applyCollapsed();
 
 function metaChip(name,cls){
   const r=runs[name], m=r.meta, sc=r.schedule||{}, sm=r.smooth||{}, cfg=r.cfg;
