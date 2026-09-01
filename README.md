@@ -5,6 +5,9 @@ inference client into one interactive dashboard page. Pick a folder (or
 individual CSV files), press **Build dashboard**, and a self-contained HTML
 page opens in your browser — every run, every joint, every signal, plus the
 derived tables (tracking error, contact events, grasps, chunk profile).
+The plots hold the raw samples: scroll to zoom into any moment — down to one
+dot per control tick with its place-in-chunk underneath — drag to pan, and
+click a contact or grasp in the tables to jump straight to it.
 
 No server, no internet, no dependencies beyond Python + numpy + pandas.
 The generated page is a single file you can copy anywhere or send to a
@@ -138,7 +141,7 @@ app to open `RunBrowser.pyw` with, use the `.bat` instead — it calls
 The command-line forms are identical, using `python` instead of `python3`:
 
 ```bash
-python -m run_browser C:\path	o\logs -o C:\path	oun-browser.html
+python -m run_browser C:\my_logs -o C:\my_logs\run-browser.html
 ```
 
 ## Requirements
