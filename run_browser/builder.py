@@ -13,6 +13,26 @@ from .config import DEFAULTS, Options
 from .template import render
 
 
+def load_chunks(csv_path: Path, cfg: Options) -> dict | None:
+    """Parse the run's .chunks.npz (logger with log_chunks). Returns
+    {seq, t_recv, skip, chunks} as numpy arrays, or None when the file is
+    absent or unreadable — older runs must never break the build."""
+    import numpy as np
+
+    path = csv_path.parent / (csv_path.stem + cfg.chunks_suffix)
+    try:
+        with np.load(path) as z:
+            need = {"seq", "t_recv", "skip", "chunks"}
+            if not need.issubset(z.files):
+                return None
+            out = {k: z[k] for k in need}
+        if out["chunks"].ndim != 3 or len(out["seq"]) != out["chunks"].shape[0]:
+            return None
+        return out
+    except (OSError, ValueError):
+        return None
+
+
 def load_meta(csv_path: Path, cfg: Options) -> dict | None:
     """Parse the run's .meta.json sidecar (logger >= v0.4). None when the
     sidecar is absent or unreadable — older runs must never break the build."""
@@ -91,7 +111,8 @@ def build(
         if progress:
             progress(f.name, i + 1, len(csvs))
         try:
-            runs[_unique_key(f.stem, f, runs)] = process_run(f, cfg, run_meta=load_meta(f, cfg))
+            runs[_unique_key(f.stem, f, runs)] = process_run(
+                f, cfg, run_meta=load_meta(f, cfg), chunk_data=load_chunks(f, cfg))
         except Exception as exc:  # a bad file skips, never kills the build
             errors.append(f"{f.name}: {exc}")
     if not runs:
