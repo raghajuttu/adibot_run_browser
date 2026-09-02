@@ -108,6 +108,17 @@ class Options:
     """Sidecar filename: <run>.csv -> <run>.meta.json (logger >= v0.4). Holds
     the run's configuration; runs without one show 'config unknown'."""
 
+    chunk_store_max_values: int = 900_000
+    """Budget for embedding the raw chunk arrays (n_chunks x steps x joints)
+    in the page, which the plans view needs. A run over budget ships its
+    metrics but no plans, flagged on the page. 150 chunks x 40 x 16 = 96k."""
+
+    plans_window_s: float = 8.0
+    """The plans view draws full predictions only when the visible window is
+    this short — a whole run's worth of overlaid chunks is an unreadable
+    smear. Wider than this, it shows the executed command and asks you to
+    zoom."""
+
     chunks_suffix: str = ".chunks.npz"
     """Full-chunk store: <run>.csv -> <run>.chunks.npz (logger with
     log_chunks, post-v0.5). Holds every action chunk including the unexecuted
