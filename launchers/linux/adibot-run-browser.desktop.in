@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Adibot Run Browser
+GenericName=Robot log dashboard
+Comment=Turn robot-run CSV logs into an interactive dashboard
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Science;Engineering;Utility;
+Keywords=robot;adibot;gr00t;logs;dashboard;
+StartupNotify=true
