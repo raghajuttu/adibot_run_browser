@@ -69,7 +69,7 @@ order to find the code. Check you are in the right place:
 cd ~/adibot_run_browser && ls
 ```
 
-You should see `run_browser`, `docs`, `README.md`. If instead you get
+You should see `run_browser`, `docs`, `launchers`, `README.md`. If instead you get
 `No module named run_browser` when you run the app, you are in the wrong
 directory — `cd ~/adibot_run_browser` and try again.
 
@@ -78,6 +78,23 @@ directory — `cd ~/adibot_run_browser` and try again.
 ```bash
 cd ~/adibot_run_browser && python3 -m run_browser
 ```
+
+Prefer clicking to typing? Install the desktop launcher once:
+
+```bash
+./launchers/linux/install-launcher.sh
+```
+
+**Adibot Run Browser** then appears in your applications menu and can be
+pinned to the dock, like any other app. (A `.desktop` entry needs an absolute
+path, which depends on where you cloned the repo — that script fills it in.
+Re-run it if you move the folder; remove it with
+`rm ~/.local/share/applications/adibot-run-browser.desktop`.)
+
+You can also run `launchers/linux/RunBrowser.sh` directly — it works from any
+directory and picks up a project `.venv` automatically. Note that most file
+managers open a `.sh` in an editor rather than running it on double-click,
+which is exactly why the desktop entry above exists.
 
 A small window opens. Press **Choose folder…** and select the directory holding
 your run CSVs (for example `~/adibot_logs`), or **Choose CSV file(s)…** to pick
@@ -136,9 +153,13 @@ same.
 
 ## Run it (Windows)
 
-Double-click **`RunBrowser.bat`** in the project folder. If Windows asks which
-app to open `RunBrowser.pyw` with, use the `.bat` instead — it calls
-`pythonw.exe` directly.
+Double-click **`launchers\windows\RunBrowser.bat`**. It finds `pythonw` on
+your PATH (falling back to the `pyw` launcher) and starts the app with no
+console window. If neither is found it tells you so instead of flashing a
+window and vanishing.
+
+`launchers\windows\RunBrowser.pyw` does the same thing for anyone who has
+`.pyw` associated with Python; the `.bat` is the reliable one.
 
 The command-line forms are identical, using `python` instead of `python3`:
 
@@ -190,3 +211,5 @@ Deliberately split so each concern is edited in exactly one place:
 | `run_browser/builder.py` | glue: files → analysis → page |
 | `run_browser/app.py` | the desktop window (folder/file picker, progress) |
 | `run_browser/__main__.py` | CLI entry point |
+| `launchers/windows/` | double-click launchers for Windows (`.bat`, `.pyw`) |
+| `launchers/linux/` | shell launcher + desktop-entry installer for Linux |
