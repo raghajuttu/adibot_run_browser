@@ -89,6 +89,13 @@ nothing to install for the reader. Light and dark theme follow the system.
   horizon). The matrix gains an *overlap mrad* column. Runs without the file
   degrade to "—" as always.
 
+- **Plans page** (third page) — per-joint panels drawing every chunk's whole
+  prediction on the time axis, coloured by region (RTC frozen / ramp / skipped
+  / executed / discarded tail) with the prefetch cut and the takeover marked,
+  plus an aggregate disagreement-vs-steps-past-the-switch curve with a p10–p90
+  band. Plans draw when zoomed under `plans_window_s`; hover names the chunk,
+  step and region. Needs a `.chunks.npz`; runs without one say so.
+
 ## Prefetch / RTC awareness (client v0.4+)
 
 - Chunk boundaries come from `inference_seq` changes, so prefetch runs

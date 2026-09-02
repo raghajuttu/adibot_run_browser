@@ -408,5 +408,46 @@ chunk-profile plot; runs without the file show "—".
   executing deeper (a larger execution horizon) is safe; rising steeply =
   the tail is stale guesswork and deeper execution would act on it.
 
+### The plans page
+
+The third page draws the predictions themselves, and is where the schedule
+becomes visible rather than numeric.
+
+**Every plan, per joint** — one panel per joint. Each faint line is one whole
+chunk, drawn on the time axis from the instant it was planned for, so
+consecutive chunks physically overlap where they describe the same moments.
+Where two lines separate, that gap *is* the disagreement. The solid red line
+is what the arm was actually commanded.
+
+Each plan is coloured by region:
+
+| colour | region | meaning |
+|---|---|---|
+| light blue | RTC frozen | the server was told to keep these identical to the previous chunk |
+| teal-green | RTC ramp | the blend region between frozen and free |
+| grey | skipped | expired in flight, discarded on arrival |
+| solid teal | executed | actually drove the arm |
+| grey dashed | discarded tail | predicted, then replaced by the next chunk |
+| **solid red line** | the prefetch cut | everything left of it was skipped |
+| red dashed line | superseded | where the next chunk took over |
+
+**One thing to look for immediately:** if the solid red prefetch cut sits to
+the *right* of the light-blue frozen band, RTC's frozen steps were all
+discarded before they could drive anything — the freeze is configured but
+never reaches the arm. That is `rtc_frozen_steps` being smaller than the skip,
+and it is invisible in every other view.
+
+Plans are drawn only when the visible window is short (8 s by default,
+`plans_window_s`) — a whole run of overlaid chunks is an unreadable smear.
+Zoom with the scroll wheel; the hint above the grid says which mode you are in.
+
+**Disagreement between consecutive plans** — the aggregate at the top of the
+page. For every chunk pair, how far apart the two plans are about the same
+instant, plotted against how many steps past the switch that instant is:
+median line with a p10–p90 band, over every pair in the run. The same region
+bands sit behind it, so you can see whether disagreement grows inside the
+executed region or only out in the discarded tail. Flat and low means each new
+plan simply continues the old one.
+
 The run matrix gains an **overlap mrad** column so configurations can be
 compared on true stability, not just the one-step splice.
