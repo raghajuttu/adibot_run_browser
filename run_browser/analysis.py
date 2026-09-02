@@ -275,6 +275,7 @@ def process_run(
     run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
     run["violations"] = _violation_rates(df, run_meta, cfg)
     run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg)
+    run["plans"] = _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg)
     return run
 
 
@@ -785,3 +786,93 @@ def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Opti
         allv = [v for vs in tail_err.values() for v in vs]
         out["tail_err_p50"] = round(float(np.median(allv)), 1)
     return out
+
+
+def _chunk_anchors(t, hi, seq, new_chunk, tick_ms) -> dict:
+    """Time of each executed chunk's step 0: t_first - hi_first * tick.
+
+    Every step of a chunk — executed or not — is placed from this anchor, so
+    two chunks land on a shared time axis without extra bookkeeping.
+    """
+    out = {}
+    for si in np.where(new_chunk)[0]:
+        out[int(seq[si])] = float(t[si]) - float(hi[si]) * tick_ms / 1000.0
+    return out
+
+
+def _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg: Options) -> dict | None:
+    """Per-chunk predicted trajectories for the plans view, plus the aggregate
+    disagreement-vs-offset curve.
+
+    Ships each chunk as: anchor time, skip applied, deepest executed step, and
+    one array per joint. Regions (skipped head / frozen / ramp / executed /
+    discarded tail) are derived on the page from these plus the run config, so
+    changing a colour never means recomputing anything.
+    """
+    if chunk_data is None or tick_ms <= 0:
+        return None
+    chunks = chunk_data["chunks"]
+    n_ch, H, D = chunks.shape
+    if D < len(names) or n_ch == 0:
+        return None
+    if n_ch * H * len(names) > cfg.chunk_store_max_values:
+        return {"omitted": True, "n_chunks": int(n_ch)}
+
+    anchor = _chunk_anchors(t, hi, seq, new_chunk, tick_ms)
+    depth: dict[int, int] = {}
+    for i in range(len(t)):
+        depth[int(seq[i])] = int(hi[i])
+
+    cseq = chunk_data["seq"].astype(int)
+    skips = chunk_data["skip"].astype(int) if "skip" in chunk_data else np.zeros(n_ch, int)
+    keep = [k for k, sq in enumerate(cseq) if int(sq) in anchor]
+    if not keep:
+        return None
+
+    store: dict = {
+        "seq": [int(cseq[k]) for k in keep],
+        "t0": [round(anchor[int(cseq[k])], 3) for k in keep],
+        "skip": [int(skips[k]) for k in keep],
+        "depth": [int(depth.get(int(cseq[k]), -1)) for k in keep],
+        "H": int(H),
+        "tick_s": round(tick_ms / 1000.0, 5),
+        "j": {},
+    }
+    for ji, n in enumerate(names):
+        col_vals = []
+        for k in keep:
+            v = chunks[k][:, ji]
+            col_vals.append([None if not np.isfinite(x) else round(float(x), 4) for x in v])
+        store["j"][n] = col_vals
+
+    # Aggregate: |old plan - new plan| by steps since the switch, over every
+    # consecutive pair, max across arm joints (same pooling as the metric).
+    arm_idx = [i for i, n in enumerate(names) if cfg.finger_marker not in n]
+    by_seq = {int(sq): k for k, sq in enumerate(cseq)}
+    per_off: dict[int, list] = {}
+    ex = sorted(anchor)
+    tick_s = tick_ms / 1000.0
+    for a_sq, b_sq in zip(ex[:-1], ex[1:]):
+        ka, kb = by_seq.get(a_sq), by_seq.get(b_sq)
+        if ka is None or kb is None:
+            continue
+        off = (anchor[b_sq] - anchor[a_sq]) / tick_s
+        o = int(round(off))
+        if abs(off - o) > 0.35 or o <= 0:
+            continue
+        n_ov = min(H - o, H)
+        for k in range(n_ov):
+            d = np.abs(chunks[ka][o + k, arm_idx] - chunks[kb][k, arm_idx]) * 1000.0
+            if np.isfinite(d).any():
+                with np.errstate(invalid="ignore"):
+                    per_off.setdefault(k, []).append(float(np.nanmax(d)))
+    if per_off:
+        ks = sorted(per_off)
+        store["agg"] = {
+            "k": ks,
+            "p50": [round(float(np.median(per_off[k])), 1) for k in ks],
+            "p10": [round(float(np.percentile(per_off[k], 10)), 1) for k in ks],
+            "p90": [round(float(np.percentile(per_off[k], 90)), 1) for k in ks],
+            "n": [len(per_off[k]) for k in ks],
+        }
+    return store
