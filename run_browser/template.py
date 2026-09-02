@@ -23,6 +23,7 @@ def render(data: dict, cfg: Options) -> str:
     html = html.replace("__HI_NM__", str(cfg.hi_contact_nm))
     html = html.replace("__V_SPLICE__", str(cfg.verdict_splice_ratio_max))
     html = html.replace("__V_DEPTH__", str(cfg.verdict_depth_max_steps))
+    html = html.replace("__PLANS_WINDOW__", str(cfg.plans_window_s))
     # "</" inside a string value (a note, a task description) would terminate
     # the <script> block early; escape it inside the JSON payload.
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
@@ -37,9 +38,10 @@ TEMPLATE = r"""<meta charset="utf-8">
 :root{--ground:#FBFCFD;--surface:#F2F5F7;--ink:#1C2733;--muted:#5A6B7A;--hairline:#DCE3E8;
 --accent:#0E7C86;--accent-soft:#E3F1F2;--warn:#A8600F;--warn-soft:#F7EBDB;--good:#3D7A46;
 --cmd:#d62728;--act:#1f77b4;--b2:#8a5fbf;
+--frozen:#5BA9D6;--ramp:#2E9B8F;--cut:#D6453C;--ghost:#8A99A6;
 --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;--disp:"Archivo","Helvetica Neue",Arial,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0}}
-:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--frozen:#7FC4E8;--ramp:#41B6A0;--cut:#FF6B6B;--ghost:#5A6B7A}}
+:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--frozen:#7FC4E8;--ramp:#41B6A0;--cut:#FF6B6B;--ghost:#5A6B7A}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);font-size:14px}
 .layout{display:flex;min-height:100vh}
@@ -118,6 +120,7 @@ tr.jump:hover td{background:var(--accent-soft)}
   <div class="seg" id="pages">
     <button data-p="signals" class="on">signals</button>
     <button data-p="matrix">run matrix</button>
+    <button data-p="plans">plans</button>
   </div>
   <div class="grp">Run</div>
   <div id="runlist"></div>
@@ -175,6 +178,20 @@ tr.jump:hover td{background:var(--accent-soft)}
       </div>
     </div>
   </div>
+  <div id="pagePlans" style="display:none">
+    <div class="chips" id="planChips"></div>
+    <div class="legend" id="planLegend"></div>
+    <div class="sec" data-sec="planagg"><h2 class="sechead"><span class="caret">&#9662;</span>Disagreement between consecutive plans</h2>
+      <div class="secbody">
+        <div class="panel" style="cursor:default"><canvas id="aggcv" height="220"></canvas></div>
+        <div class="note">How far apart two consecutive chunks are about the same instant, by how many steps past the switch it is. Line = median over every chunk pair, band = p10&ndash;p90. Flat and low means each new plan continues the old one.</div>
+      </div></div>
+    <div class="sec" data-sec="planjoints"><h2 class="sechead"><span class="caret">&#9662;</span>Every plan, per joint</h2>
+      <div class="secbody">
+        <div class="note" id="planHint" style="margin-bottom:6px"></div>
+        <div class="grid" id="plangrid"></div>
+      </div></div>
+  </div>
   <div id="pageMatrix" style="display:none">
     <div class="sec" data-sec="matrix"><h2 class="sechead" style="margin-top:0"><span class="caret">&#9662;</span>Run matrix</h2>
       <div class="secbody">
@@ -198,7 +215,7 @@ tr.jump:hover td{background:var(--accent-soft)}
 <script>
 const DATA=__DATA__;
 const HI_ERR=__HI_ERR__, HI_NM=__HI_NM__;
-const V_SPLICE=__V_SPLICE__, V_DEPTH=__V_DEPTH__;
+const V_SPLICE=__V_SPLICE__, V_DEPTH=__V_DEPTH__, PLANS_WINDOW=__PLANS_WINDOW__;
 const runs=DATA.runs, names=Object.keys(runs);
 let runA=names[0], runB="", view="track", side="all", page="signals";
 let vp=null;               // shared viewport {t0,t1}; null = full range
@@ -490,7 +507,8 @@ function drawCrosshair(g,cv,padL,padT,iw,ih){
 }
 
 function redrawAll(){
-  panelReg.forEach(p=>drawPanel(p.cv,p.joint,p.big));
+  panelReg.forEach(p=>p.plans?drawPlanPanel(p.cv,p.joint):drawPanel(p.cv,p.joint,p.big));
+  if(page==="plans"){drawAgg(); const h=$("planHint"); if(h)h.textContent=planHintText();}
 }
 let rafPending=false;
 function scheduleRedraw(){
@@ -651,8 +669,10 @@ function render(){
   document.querySelectorAll("#pages button").forEach(b=>b.classList.toggle("on",b.dataset.p===page));
   $("plotsTitle").textContent=VIEW_TITLES[view]||view;
   $("pageSignals").style.display=page==="signals"?"":"none";
+  $("pagePlans").style.display=page==="plans"?"":"none";
   $("pageMatrix").style.display=page==="matrix"?"":"none";
   if(page==="matrix"){renderMatrix();return}
+  if(page==="plans"){renderPlans();return}
   $("chips").innerHTML=metaChip(runA,"")+(runB?metaChip(runB,"b"):"");
   const unit=view==="track"?"rad":view==="vel"?"rad/s":view==="eff"?"Nm":"mrad";
   let lg=`<b>${unit}</b>`;
@@ -882,6 +902,224 @@ function drawHist(){
       `at splices: <b>${ca}</b> ticks (${nA?(100*ca/nA).toFixed(1):0}%)`],
       snapX:X(bi)+iw/NB/2};
   };
+}
+
+// ------------------------------------------------------------------- plans
+// Which region of its chunk step k belongs to. Derived on the page (not in
+// the analysis) so recolouring never means recomputing:
+//   skipped  - expired in flight, discarded on arrival (the prefetch cut)
+//   frozen   - RTC told the server to keep these identical to the last chunk
+//   ramp     - RTC blend region between frozen and free
+//   executed - actually drove the arm
+//   tail     - predicted, then replaced by the next chunk
+function regionOf(k,skip,depth,cfg){
+  const fz=(cfg&&cfg.rtc_enable)?(cfg.rtc_frozen_steps||0):0;
+  const ov=(cfg&&cfg.rtc_enable)?(cfg.rtc_overlap_steps||0):0;
+  if(k<fz)return "frozen";
+  if(k<ov)return "ramp";
+  if(k<skip)return "skipped";
+  if(depth>=0&&k<=depth)return "executed";
+  return "tail";
+}
+const REGION_COLOR={frozen:"--frozen",ramp:"--ramp",skipped:"--ghost",
+                    executed:"--accent",tail:"--ghost"};
+const REGION_LABEL={frozen:"RTC frozen",ramp:"RTC ramp",skipped:"skipped (prefetch cut)",
+                    executed:"executed",tail:"discarded tail"};
+function planStore(){const P=runs[runA].plans; return (P&&!P.omitted)?P:null}
+function planHintText(){
+  const[a,b]=viewRange();
+  return (b-a)>PLANS_WINDOW
+    ? "Showing "+Math.round(b-a)+"s — zoom in below "+PLANS_WINDOW+"s (scroll on a plot) to draw every chunk's full plan."
+    : "Each faint line is one chunk's whole plan, coloured by region.";
+}
+
+function drawPlanPanel(cv,j){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=170;
+  if(!W)return;
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
+  const g=cv.getContext("2d");g.scale(dpr,dpr);
+  const padL=46,padR=6,padT=6,padB=16,iw=W-padL-padR,ih=H-padT-padB;
+  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  const P=planStore();
+  if(!P){g.fillText("no chunk file for this run",padL,H/2);return}
+  const arrs=P.j[j];
+  if(!arrs){g.fillText("joint not in the chunk store",padL,H/2);return}
+  const[t0,t1]=viewRange();
+  const cfg=runs[runA].cfg;
+  let ymin=Infinity,ymax=-Infinity;const vis=[];
+  for(let c=0;c<P.seq.length;c++){
+    const a=P.t0[c], b=a+(P.H-1)*P.tick_s;
+    if(b<t0||a>t1)continue;
+    vis.push(c);
+    arrs[c].forEach(v=>{if(v==null)return; if(v<ymin)ymin=v; if(v>ymax)ymax=v});
+  }
+  if(!isFinite(ymin)){g.fillText("no plans in this window",padL,H/2);return}
+  if(ymax-ymin<1e-9){ymax+=.01;ymin-=.01}
+  const pd=(ymax-ymin)*.08;ymin-=pd;ymax+=pd;
+  const X=t=>padL+iw*(t-t0)/(t1-t0), Y=v=>padT+ih*(1-(v-ymin)/(ymax-ymin));
+  g.save();g.beginPath();g.rect(padL,padT,iw,ih);g.clip();
+  const wide=(t1-t0)>PLANS_WINDOW;
+  if(!wide){
+    vis.forEach(c=>{
+      const skip=P.skip[c],depth=P.depth[c],y=arrs[c],base=P.t0[c];
+      let k=0;
+      while(k<P.H-1){
+        const reg=regionOf(k,skip,depth,cfg);
+        let k2=k;
+        while(k2<P.H-1&&regionOf(k2,skip,depth,cfg)===reg)k2++;
+        g.strokeStyle=css(REGION_COLOR[reg]);
+        g.globalAlpha=(reg==="executed")?.95:.5;
+        g.lineWidth=(reg==="executed")?1.4:1;
+        g.setLineDash(reg==="tail"?[3,3]:[]);
+        g.beginPath();let st=false;
+        for(let i=k;i<=k2&&i<P.H;i++){
+          const v=y[i]; if(v==null){st=false;continue}
+          const x=X(base+i*P.tick_s),yy=Y(v);
+          st?g.lineTo(x,yy):g.moveTo(x,yy); st=true;
+        }
+        g.stroke();g.setLineDash([]);
+        k=k2;
+      }
+      // the prefetch cut: everything left of here expired in flight and was
+      // discarded. If it sits right of the frozen band, RTC's frozen steps
+      // never reached the arm at all.
+      if(skip>0){
+        const xs=X(base+skip*P.tick_s);
+        g.strokeStyle=css("--cut");g.globalAlpha=.9;g.lineWidth=1.2;
+        g.beginPath();g.moveTo(xs,padT);g.lineTo(xs,padT+ih);g.stroke();
+      }
+      // where the next chunk superseded this one
+      if(depth>=0&&depth<P.H-1){
+        const xc=X(base+(depth+1)*P.tick_s);
+        g.strokeStyle=css("--cut");g.globalAlpha=.6;g.lineWidth=1;
+        g.setLineDash([2,2]);g.beginPath();g.moveTo(xc,padT);g.lineTo(xc,padT+ih);
+        g.stroke();g.setLineDash([]);
+      }
+      g.globalAlpha=1;
+    });
+  }
+  const tr=runs[runA].traces[j];
+  if(tr&&tr.cmd){
+    const tt=tr.cmd[0],yy=tr.cmd[1];
+    g.strokeStyle=css("--cmd");g.lineWidth=1.2;g.beginPath();
+    let st=false;
+    for(let i=0;i<tt.length;i++){
+      if(tt[i]<t0||tt[i]>t1){st=false;continue}
+      const x=X(tt[i]),v=Y(yy[i]); st?g.lineTo(x,v):g.moveTo(x,v); st=true;
+    }
+    g.stroke();
+  }
+  drawCrosshair(g,cv,padL,padT,iw,ih);
+  g.restore();
+  g.fillStyle=css("--muted");
+  g.fillText(ymax.toFixed(2),2,padT+8);g.fillText(ymin.toFixed(2),2,padT+ih);
+  g.fillText(t1.toFixed(t1-t0<5?2:0)+"s",W-padR-34,H-4);
+  g.fillText(t0.toFixed(t1-t0<5?2:0),padL,H-4);
+  cv._probe=(px,py)=>{
+    if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
+    const tq=t0+(px-padL)/iw*(t1-t0);
+    const lines=["<b>"+short(j)+"</b> @ "+tq.toFixed(2)+"s"];
+    let hits=0;
+    vis.forEach(c=>{
+      const k=Math.round((tq-P.t0[c])/P.tick_s);
+      if(k<0||k>=P.H)return;
+      const v=arrs[c][k]; if(v==null)return;
+      hits++;
+      if(hits<=4){
+        const reg=regionOf(k,P.skip[c],P.depth[c],cfg);
+        lines.push("chunk <b>"+P.seq[c]+"</b> step "+k+" · <b>"+v.toFixed(3)+"</b> · "+REGION_LABEL[reg]);
+      }
+    });
+    if(hits>4)lines.push("… and "+(hits-4)+" more plans here");
+    return hits?{lines:lines}:null;
+  };
+}
+
+function drawAgg(){
+  const cv=$("aggcv"); if(!cv||page!=="plans")return;
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=220;
+  if(!W)return;
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
+  const g=cv.getContext("2d");g.scale(dpr,dpr);
+  const padL=46,padR=10,padT=10,padB=22,iw=W-padL-padR,ih=H-padT-padB;
+  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  const P=planStore(), agg=P&&P.agg;
+  if(!agg){g.fillText(P?"not enough chunk pairs to aggregate":"no chunk file for this run",padL,H/2);return}
+  const cfg=runs[runA].cfg;
+  const kmax=agg.k[agg.k.length-1]||1;
+  let ymax=1; agg.p90.forEach(v=>{if(v>ymax)ymax=v}); ymax*=1.1;
+  const X=k=>padL+iw*k/Math.max(kmax,1), Y=v=>padT+ih*(1-v/ymax);
+  const med=a=>{const b=a.slice().sort((x,y)=>x-y);return b.length?b[Math.floor(b.length/2)]:0};
+  const skipMed=med(P.skip), depthMed=med(P.depth);
+  let k=0;
+  while(k<=kmax){
+    const reg=regionOf(k,skipMed,depthMed,cfg);
+    let k2=k; while(k2<=kmax&&regionOf(k2,skipMed,depthMed,cfg)===reg)k2++;
+    g.fillStyle=css(REGION_COLOR[reg]);g.globalAlpha=.10;
+    g.fillRect(X(k),padT,Math.max(X(k2)-X(k),1),ih);
+    g.globalAlpha=1;
+    if(X(k2)-X(k)>56){g.fillStyle=css(REGION_COLOR[reg]);g.fillText(REGION_LABEL[reg],X(k)+3,padT+10)}
+    k=k2;
+  }
+  if(skipMed>0&&skipMed<=kmax){
+    g.strokeStyle=css("--cut");g.lineWidth=1.2;g.beginPath();
+    g.moveTo(X(skipMed),padT);g.lineTo(X(skipMed),padT+ih);g.stroke();
+    g.fillStyle=css("--cut");g.fillText("prefetch cut",X(skipMed)+3,padT+ih-4);
+  }
+  if(depthMed>=0&&depthMed<kmax){
+    g.strokeStyle=css("--cut");g.globalAlpha=.6;g.lineWidth=1;g.setLineDash([2,2]);
+    g.beginPath();g.moveTo(X(depthMed+1),padT);g.lineTo(X(depthMed+1),padT+ih);
+    g.stroke();g.setLineDash([]);g.globalAlpha=1;
+  }
+  g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
+  g.fillStyle=css("--accent");g.globalAlpha=.16;g.beginPath();
+  agg.k.forEach((kk,i)=>{const x=X(kk),y=Y(agg.p90[i]); i?g.lineTo(x,y):g.moveTo(x,y)});
+  for(let i=agg.k.length-1;i>=0;i--)g.lineTo(X(agg.k[i]),Y(agg.p10[i]));
+  g.closePath();g.fill();g.globalAlpha=1;
+  g.strokeStyle=css("--accent");g.lineWidth=1.6;g.beginPath();
+  agg.k.forEach((kk,i)=>{const x=X(kk),y=Y(agg.p50[i]); i?g.lineTo(x,y):g.moveTo(x,y)});
+  g.stroke();
+  g.fillStyle=css("--muted");
+  g.fillText(Math.round(ymax)+" mrad",2,padT+8);g.fillText("0",padL-10,padT+ih);
+  g.fillText("steps past the chunk switch",padL+iw/2-62,H-5);
+  g.fillText(String(kmax),W-padR-14,H-5);g.fillText("0",padL,H-5);
+  drawCrosshair(g,cv,padL,padT,iw,ih);
+  cv._probe=(px,py)=>{
+    if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
+    const kq=Math.round((px-padL)/iw*kmax);
+    const i=agg.k.indexOf(kq); if(i<0)return null;
+    return {lines:["<b>"+kq+"</b> steps past the switch",
+      "median <b>"+agg.p50[i]+"</b> mrad · p10–p90 "+agg.p10[i]+"–"+agg.p90[i],
+      REGION_LABEL[regionOf(kq,skipMed,depthMed,cfg)]+" · "+agg.n[i]+" chunk pairs"],
+      snapX:X(kq)};
+  };
+}
+
+function renderPlans(){
+  const P=runs[runA].plans;
+  let chips=metaChip(runA,"");
+  if(P&&P.omitted)chips+='<span class="chip">plans omitted — '+P.n_chunks+' chunks, over the size budget</span>';
+  else if(!P)chips+='<span class="chip">no .chunks.npz — this run predates chunk logging</span>';
+  $("planChips").innerHTML=chips;
+  let lg="";
+  ["executed","frozen","ramp","skipped","tail"].forEach(r=>{
+    lg+='<i style="background:'+css(REGION_COLOR[r])+'"></i>'+REGION_LABEL[r];
+  });
+  lg+='<i style="background:'+css("--cut")+'"></i>prefetch cut (solid) / superseded (dashed)';
+  lg+='<i style="background:'+css("--cmd")+'"></i>actually commanded';
+  $("planLegend").innerHTML=lg;
+  $("planHint").textContent=planHintText();
+  const grid=$("plangrid"); grid.innerHTML="";
+  panelReg.length=0;
+  joints().forEach(j=>{
+    const pnl=document.createElement("div"); pnl.className="panel";
+    pnl.innerHTML='<div class="ttl">'+short(j)+'</div>';
+    const cv=document.createElement("canvas"); pnl.appendChild(cv); grid.appendChild(pnl);
+    attachZoom(cv);
+    panelReg.push({cv:cv,joint:j,plans:true});
+    requestAnimationFrame(()=>drawPlanPanel(cv,j));
+  });
+  requestAnimationFrame(drawAgg);
 }
 
 // ------------------------------------------------------------------ matrix
