@@ -1,0 +1,11 @@
+# Line endings. Shell scripts and desktop entries MUST be LF whatever the
+# platform they were authored on: a CRLF shebang fails with "bad interpreter",
+# and a .desktop file with CRLF is silently ignored by the menu.
+* text=auto
+
+*.sh text eol=lf
+*.desktop text eol=lf
+*.desktop.in text eol=lf
+*.py text eol=lf
+
+*.bat text eol=crlf
