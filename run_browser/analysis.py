@@ -118,7 +118,7 @@ def process_run(
 
     run_meta is the parsed .meta.json sidecar (None for pre-v0.4 logs); it is
     both echoed into the result and used where a metric needs a configured
-    value (e.g. the RTC overlap region).
+    value (e.g. which guards were enabled).
     """
     col = cfg.column_names
     df = pd.read_csv(csv_path)
@@ -274,7 +274,7 @@ def process_run(
     run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
     run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
     run["violations"] = _violation_rates(df, run_meta, cfg)
-    run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg)
+    run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, cfg)
     run["plans"] = _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg)
     run["pred"] = _prediction(chunk_data, names, cfg)
     return run
@@ -475,14 +475,12 @@ def _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg: Options) -> dict:
     sk = _opt_series(df, col["skip_steps"])
     if sk is not None and sk.notna().any():
         out["skip_logged_p50"] = _pct(sk.dropna().values, 50)
-    # Fraction of requests that carried the previous chunk back. This says the
-    # client SENT it, not that the server used it: RTC lives in the action head
-    # and a stock Gr00tPolicy discards `options`, so unless the server has been
-    # patched this can read 1.0 while no RTC ever runs.
-    rtc = _opt_series(df, col["rtc_applied"])
-    if rtc is not None and rtc.notna().any():
-        v = rtc.dropna().values.astype(float)
-        out["rtc_applied_frac"] = round(float(v.mean()), 3)
+    # No RTC metric here. rtc_applied only ever recorded that the CLIENT sent
+    # the previous chunk back; a stock Gr00tPolicy discards `options` and
+    # rebuilds the observation from video/state/language alone, so the number
+    # described the client's intent and never the server's behaviour. The RTC
+    # metrics live on the feat/rtc-metrics branch, to come back if and when
+    # the server actually applies them.
     buf = _opt_series(df, col["buffer_len"])
     if buf is not None and buf.notna().any():
         out["starved_ticks"] = int((buf.dropna().values.astype(float) == 0).sum())
@@ -616,14 +614,10 @@ def _smoothness(df, names, new_chunk, dt_ms, cfg: Options) -> dict:
 
 def _grasp_attempts(df, names, t, hi, run_meta: dict | None, cfg: Options) -> dict:
     """Per finger: every close attempt, with the horizon depth it was issued
-    at, its command rise time (10->90% of the drop — RTC ramping lengthens
-    it), whether it fell inside the configured RTC overlap region, and
-    whether it succeeded (the finger stopped short = held something)."""
+    at, its command rise time (10->90% of the drop) and whether it succeeded
+    (the finger stopped short = held something)."""
     col = cfg.column_names
     out: dict = {}
-    overlap = None
-    if isinstance(run_meta, dict) and run_meta.get("rtc_enable"):
-        overlap = run_meta.get("rtc_overlap_steps")
     for n in [x for x in names if cfg.finger_marker in x]:
         cmd = df[f"{col['cmd_prefix']}{n}"].values.astype(float)
         aname = f"{col['act_prefix']}{n}"
@@ -675,13 +669,10 @@ def _grasp_attempts(df, names, t, hi, run_meta: dict | None, cfg: Options) -> di
             ev = {
                 "t": round(float(t[a]), 1),
                 # anchored where the close ramp begins, not where it crosses
-                # the closed threshold — the ramp start is what RTC blends
                 "hi": int(hi[s]),
                 "rise_ms": rise_ms,
                 "success": success,
             }
-            if overlap is not None:
-                ev["in_overlap"] = bool(hi[s] < overlap)
             events.append(ev)
             prev_b = b
         out[n] = events
@@ -712,7 +703,7 @@ def _violation_rates(df, run_meta: dict | None, cfg: Options) -> dict:
 
 
 # ------------------------------------------------- full-chunk overlap metrics
-def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Options) -> dict | None:
+def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, cfg: Options) -> dict | None:
     """Metrics that need the UNEXECUTED part of each chunk (<run>.chunks.npz).
 
     Alignment needs no extra bookkeeping: the CSV anchors each chunk in time.
@@ -743,10 +734,8 @@ def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Opti
 
     tick_s = tick_ms / 1000.0
     pair_med, pair_seq = [], []
-    frozen_mm = []
-    frozen_steps = None
-    if isinstance(run_meta, dict) and run_meta.get("rtc_enable"):
-        frozen_steps = run_meta.get("rtc_frozen_steps")
+    # (No frozen-region check: RTC never reaches the server. See
+    #  feat/rtc-metrics for that measurement.)
 
     exec_seqs = sorted(anchor)
     for a_sq, b_sq in zip(exec_seqs[:-1], exec_seqs[1:]):
@@ -773,15 +762,6 @@ def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Opti
             continue
         pair_med.append(float(np.median(dmax)))
         pair_seq.append(int(b_sq))
-        if frozen_steps:
-            m = min(int(frozen_steps), n)
-            fz = np.abs(ca[o : o + m][:, arm_idx] - cb[:m][:, arm_idx]) * 1000.0
-            fv = np.isfinite(fz).any(axis=1)
-            if fv.any():
-                with np.errstate(invalid="ignore"):
-                    v = np.nanmedian(np.nanmax(fz[fv], axis=1))
-                if np.isfinite(v):
-                    frozen_mm.append(float(v))
 
     out: dict = {"pairs": len(pair_med)}
     if pair_med:
@@ -791,8 +771,6 @@ def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Opti
         worst = int(np.argmax(arr))
         out["disagree_max"] = round(float(arr[worst]), 1)
         out["disagree_max_seq"] = pair_seq[worst]
-    if frozen_mm:
-        out["rtc_frozen_mismatch_p50"] = round(float(np.median(frozen_mm)), 1)
 
     # Discarded-tail quality: unexecuted steps vs what was ACTUALLY commanded
     # at those instants (from the CSV), aggregated by horizon_idx.
@@ -850,7 +828,7 @@ def _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg: Options)
     disagreement-vs-offset curve.
 
     Ships each chunk as: anchor time, skip applied, deepest executed step, and
-    one array per joint. Regions (skipped head / frozen / ramp / executed /
+    one array per joint. Regions (skipped head / executed /
     discarded tail) are derived on the page from these plus the run config, so
     changing a colour never means recomputing anything.
     """
