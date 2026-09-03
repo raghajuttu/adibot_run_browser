@@ -182,7 +182,7 @@ Joint names are discovered from the header — nothing about the 16-joint
 bimanual layout is hardcoded. Files with missing velocity/effort columns still
 work; unreadable files are skipped and reported, never fatal.
 
-**Blocking, prefetch and RTC runs are all read correctly, side by side in the
+**Blocking and prefetch runs are all read correctly, side by side in the
 same folder.** Chunk boundaries are detected from `inference_seq` changes, so a
 prefetch run — where `horizon_idx` starts at 7–12 instead of 0 because the steps
 that expired in flight are skipped — is not misread. Client v0.4+ also writes
