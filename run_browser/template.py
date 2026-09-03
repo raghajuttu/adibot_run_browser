@@ -643,7 +643,10 @@ function metaChip(name,cls){
   const r=runs[name], m=r.meta, sc=r.schedule||{}, sm=r.smooth||{}, cfg=r.cfg;
   const lat=m.lat_p50==null?"":` · lat p50 <b>${m.lat_p50}ms</b>`;
   let mode="";
-  if(cfg) mode=` · ${cfg.prefetch_enable?"prefetch":"blocking"}${cfg.rtc_enable?"+RTC":""}`;
+  // How the run actually behaved. rtc_enable is deliberately not appended:
+  // the flag changes nothing the server does, so "+RTC" would name a mode
+  // that does not exist. The config line below still records that it was set.
+  if(cfg) mode=` · ${cfg.prefetch_enable?"prefetch":"blocking"}`;
   else if(m.stalled_run!=null) mode=` · ${m.stalled_run?"blocking?":"prefetch?"}`;
   const depth=sc.depth_p95!=null?` · depth p95 <b>${sc.depth_p95}</b>`:"";
   const spl=sm.splice_ratio!=null?` · splice <b>×${sm.splice_ratio}</b>`:"";
@@ -757,8 +760,7 @@ function renderTables(){
   Object.keys(ge).forEach(n=>{
     ge[n].forEach(e=>{
       const ok=e.success==null?"outcome not measurable":(e.success?"✓ held":"✗ air");
-      const ov=e.in_overlap==null?"":(e.in_overlap?" · in RTC overlap":" · outside overlap");
-      gh+=`<div class="note"><a href="#" data-t="${e.t}" class="jl">${short(n)} close @ ${e.t}s</a> · step ${e.hi} · rise ${dash(e.rise_ms)}ms · ${ok}${ov}</div>`;
+      gh+=`<div class="note"><a href="#" data-t="${e.t}" class="jl">${short(n)} close @ ${e.t}s</a> · step ${e.hi} · rise ${dash(e.rise_ms)}ms · ${ok}</div>`;
     });
   });
   $("graspbox").innerHTML=gh;
@@ -773,21 +775,12 @@ function renderTables(){
   fh+=row("stalls >100ms / time stalled",sc.stall_count!=null?`${sc.stall_count} / ${(100*(sc.stalled_frac||0)).toFixed(1)}%`:null);
   fh+=row("starved ticks (buffer=0)",sc.starved_ticks);
   fh+=row("effective rate (Hz)",sc.effective_hz);
-  // Named for what the client can actually observe. It logs that a request
-  // CARRIED the previous chunk, not that the server did anything with it —
-  // a stock GR00T server drops `options` and never runs RTC.
-  fh+=row("previous chunk sent back (fraction of requests)",sc.rtc_applied_frac);
   fh+=row("cmd step within / at splice (mrad)",sm.step_within_p50!=null?`${sm.step_within_p50} / ${dash(sm.step_splice_p50)}`:null);
   fh+=row("splice ratio",sm.splice_ratio!=null?`×${sm.splice_ratio}${sm.splice_ratio>=V_SPLICE?" ⚠":""}${runs[runA].meta.stalled_run?" (spans a stall — compare with blocking runs only)":""}`:null);
   fh+=row("splice p95 / max (mrad)",sm.splice_p95!=null?`${sm.splice_p95} / ${sm.splice_max} (chunk ${sm.splice_max_seq})`:null,sm.splice_max_seq);
   const ov=runs[runA].overlap||{};
   fh+=row("chunk overlap disagreement p50/p95 (mrad)",ov.disagree_p50!=null?`${ov.disagree_p50} / ${dash(ov.disagree_p95)} over ${ov.pairs} pairs`:null);
   fh+=row("worst overlap disagreement (mrad)",ov.disagree_max!=null?`${ov.disagree_max} (chunk ${ov.disagree_max_seq})`:null,ov.disagree_max_seq);
-  // Evidence, not a setting: how much the steps RTC asked the server to
-  // freeze actually changed. Near zero would mean the freeze took effect; a
-  // large value confirms the request was dropped.
-  fh+=row("steps RTC asked to freeze, actual change (mrad)",ov.rtc_frozen_mismatch_p50!=null
-    ?`${ov.rtc_frozen_mismatch_p50} <span class="dim">(≈0 would mean RTC took effect)</span>`:null);
   fh+=row("discarded-tail error vs later cmd (mrad)",ov.tail_err_p50);
   fh+=row("cmd jerk within / at splice",sm.jerk_within_p50!=null?`${sm.jerk_within_p50} / ${dash(sm.jerk_splice_p50)}`:null);
   fh+=row("reversing joints at splice / within (median)",sm.rev_joints_splice_p50!=null?`${sm.rev_joints_splice_p50} / ${dash(sm.rev_joints_within_p50)}`:null);
@@ -812,7 +805,7 @@ function renderTables(){
   fh+=row("limit-guard held left / right",(vi.left!=null||vi.right!=null)?`${(100*(vi.left||0)).toFixed(1)}% / ${(100*(vi.right||0)).toFixed(1)}%`:null);
   fh+="</table>";
   if(cfg){
-    fh+=`<div class="note" style="margin-top:6px">config: ${esc(dash(cfg.checkpoint_label)||"?")} · exec ${esc(dash(cfg.execution_horizon))} · prefetch ${cfg.prefetch_enable?("on, lead "+esc(dash(cfg.prefetch_lead))):"off"} · RTC ${cfg.rtc_enable?("on, overlap "+esc(dash(cfg.rtc_overlap_steps))+", frozen "+esc(dash(cfg.rtc_frozen_steps))):"off"} · v${esc(dash(cfg.package_version))}</div>`;
+    fh+=`<div class="note" style="margin-top:6px">config: ${esc(dash(cfg.checkpoint_label)||"?")} · exec ${esc(dash(cfg.execution_horizon))} · prefetch ${cfg.prefetch_enable?("on, lead "+esc(dash(cfg.prefetch_lead))):"off"}${cfg.rtc_enable?' · <span class="dim">rtc_enable was set (no effect: the server drops it)</span>':""} · v${esc(dash(cfg.package_version))}</div>`;
     if(cfg.notes)fh+=`<div class="note">notes: ${esc(cfg.notes)}</div>`;
   }else{
     fh+=`<div class="note" style="margin-top:6px">config unknown — no .meta.json sidecar (log predates logger v0.4)</div>`;
@@ -1308,7 +1301,7 @@ function renderPlans(){
 function renderMatrix(){
   const cols=[
     ["run",r=>esc(r.name)],["ckpt",r=>r.cfg?esc(dash(r.cfg.checkpoint_label)):"—"],
-    ["mode",r=>r.cfg?((r.cfg.prefetch_enable?"prefetch":"blocking")+(r.cfg.rtc_enable?"+RTC":"")):"—"],
+    ["mode",r=>r.cfg?(r.cfg.prefetch_enable?"prefetch":"blocking"):"—"],
     ["exec",r=>r.cfg?dash(r.cfg.execution_horizon):"—"],
     ["cycle p50",r=>dash((r.schedule||{}).cycle_p50)],
     ["skip p50",r=>dash((r.schedule||{}).skip_p50)],
