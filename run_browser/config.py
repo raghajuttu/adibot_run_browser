@@ -152,6 +152,13 @@ class Options:
     its demonstrations is emitting a zigzag rather than a trajectory, which
     is a model problem no scheduling strategy can fix."""
 
+    dircos_usable_min: float = 0.8
+    """A horizon step counts as 'usable' when the model's plan keeps at least
+    this much direction continuity there. The longest run of usable steps is
+    reported as the part of the horizon the policy plans coherently — the
+    window an execution horizon should stay inside. Raise it to be stricter
+    about what counts as a trajectory."""
+
     # ------------------------------------------------------- grasp attempts
     grasp_close_frac: float = 0.35
     """A finger counts as commanded-closed when its command drops below this
