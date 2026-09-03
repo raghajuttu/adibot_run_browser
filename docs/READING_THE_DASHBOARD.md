@@ -59,8 +59,8 @@ run a long tick gap is no longer expected — it means the buffer ran dry
 
 Runs from client v0.4+ also ship a `<run>.meta.json` **sidecar** with the full
 configuration (checkpoint label, prefetch/RTC settings, execution horizon…).
-It feeds the config line under Run facts and the run-matrix columns. Older
-runs show "config unknown" — everything else still works.
+It feeds the Run configuration section (§5) and the run-matrix columns.
+Older runs show "config unknown" — everything else still works.
 
 ---
 
@@ -82,11 +82,15 @@ choice persists between visits, and the last visible run cannot be hidden.
 The page embeds the raw command and actual-position arrays, so zooming reveals
 real data, not bigger pixels:
 
-- **Click any plot to enlarge it**, then **scroll** to zoom around the cursor,
-  **drag** to pan and **double-click** to reset. Zooming happens only inside
-  the enlarged view: dragging one small panel used to move all sixteen, which
-  is not what anyone means by panning a chart. Closing it returns the grid to
-  the full run.
+- **Click any chart to enlarge it** — the per-joint panels, the chunk
+  profile, the step distribution, both horizon charts and the disagreement
+  curve. In the enlarged view of a time-axis chart, **scroll** zooms around the
+  cursor, **drag** pans and **double-click** resets; the title bar says so.
+  Charts whose x axis is not time (horizon step, mrad bins) enlarge and keep
+  their hover readouts but have nothing to zoom, and their title says that
+  instead. **Esc** closes. Zooming happens only inside the enlarged view:
+  dragging one small panel used to move all sixteen, which is not what anyone
+  means by panning a chart.
 - The grid still follows a **jump** from a table row, so clicking a contact or
   a grasp moves every panel to that moment together.
 - Detail appears as you go: far out you see today's overview line; closer, the
@@ -122,8 +126,9 @@ the motion and gross weirdness.
 
 ### error
 Commanded minus actual, in **mrad** (1 mrad ≈ 0.057°), around a zero line.
-Distance from zero is the real tracking error, no scale tricks. Faint red
-verticals (toggle: *chunk boundaries*) mark where each new chunk began.
+Distance from zero is the real tracking error, no scale tricks. Pink
+verticals (toggle: *chunk boundaries*) mark where each new chunk began —
+the same colour on every page that draws them.
 
 A line that sits at a constant offset from zero is **sag** (see §4). A line
 that spikes during motion and returns to zero is **lag**.
@@ -221,6 +226,34 @@ How to read it:
   `depth p95`).
 - Comparing two runs with different execution horizons (16 vs 25) in this
   table is the direct way to decide whether a longer horizon is safe.
+
+---
+
+## 5. Run configuration
+
+What the inference actually ran on, straight from the `.meta.json` sidecar,
+grouped by the question a reader is asking:
+
+| group | fields |
+|---|---|
+| **policy** | checkpoint, task description, client version, start time |
+| **scheduling** | execution horizon, server chunk length, prefetch on/off and lead, control rate, request timeout |
+| **guards** | joint-limit guard and its source, joint min/max, out-of-distribution warning fraction, gripper effort and delta |
+| **enabled** | which arms and grippers were driven |
+| **server** | host and port |
+| **outcome** | duration, ticks, requests issued / dropped / stale / failed, stalled ticks, whether a chunk store was written |
+
+Every field the client writes is shown; one it did not write shows as a dash,
+so an older log is visibly older rather than silently thinner. Anything the
+client recorded that is not in the table above is listed underneath as
+*also recorded*, so a new field never disappears.
+
+Runs configured with `rtc_enable` get a note saying the flag was set and had
+no effect — see §1. Runs with no sidecar say *config unknown*.
+
+This is the section to read before comparing two runs: a difference in
+smoothness between runs with different execution horizons or prefetch leads
+is a difference in configuration first.
 
 ---
 
@@ -568,11 +601,20 @@ is a scheduling fix (execute less deeply, or infer more often), not a
 retraining one. If the bracket is short or absent everywhere, the plan is
 noisy end to end, and that *is* a model or data problem.
 
-**Every plan, per joint** — one panel per joint. Each faint line is one whole
-chunk, drawn on the time axis from the instant it was planned for, so
-consecutive chunks physically overlap where they describe the same moments.
-Where two lines separate, that gap *is* the disagreement. The solid red line
-is what the arm was actually commanded.
+**Every plan, per joint** — one panel per joint. Each line is one whole chunk,
+drawn on the time axis from the instant it was planned for, so consecutive
+chunks physically overlap where they describe the same moments. Where two
+lines separate, that gap *is* the disagreement. The solid red line is what the
+arm was actually commanded, and the **pink verticals are chunk boundaries** —
+the same colour they have on the signals page — labelled with the chunk number
+when there is room.
+
+The small grid panel draws each chunk's **executed** steps only, over the
+command and the boundaries. All three regions at 300 px were one pale smear,
+because a later chunk's skipped head draws over the previous chunk's executed
+steps and three hues at 1.4 px cannot be told apart; what the grid needs to say
+is *where each plan disagreed with what was sent*. **Enlarge a panel** to see
+the skipped head and the discarded tail as well.
 
 Each plan is coloured by region:
 
