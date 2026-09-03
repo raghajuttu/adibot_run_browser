@@ -42,10 +42,10 @@ TEMPLATE = r"""<meta charset="utf-8">
 :root{--ground:#FBFCFD;--surface:#F2F5F7;--ink:#1C2733;--muted:#5A6B7A;--hairline:#DCE3E8;
 --accent:#0E7C86;--accent-soft:#E3F1F2;--warn:#A8600F;--warn-soft:#F7EBDB;--good:#3D7A46;
 --cmd:#d62728;--act:#1f77b4;--b2:#8a5fbf;
---cut:#33424F;--ghost:#63768A;--tail:#7B5EA7;
+--cut:#33424F;--ghost:#63768A;--tail:#7B5EA7;--bound:#C2185B;
 --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;--disp:"Archivo","Helvetica Neue",Arial,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#C8D6E0;--ghost:#7E8FA0;--tail:#c9a6f0}}
-:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#C8D6E0;--ghost:#7E8FA0;--tail:#c9a6f0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#C8D6E0;--ghost:#7E8FA0;--tail:#c9a6f0;--bound:#FF7AC8}}
+:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#C8D6E0;--ghost:#7E8FA0;--tail:#c9a6f0;--bound:#FF7AC8}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);font-size:14px}
 .layout{display:flex;min-height:100vh}
@@ -184,7 +184,6 @@ tr.jump:hover td{background:var(--accent-soft)}
   </div>
   <div id="pagePlans" style="display:none">
     <div class="chips" id="planChips"></div>
-    <div class="legend" id="planLegend"></div>
     <div class="sec" data-sec="predq"><h2 class="sechead"><span class="caret">&#9662;</span>What the model predicted &mdash; quality across the horizon</h2>
       <div class="secbody">
         <div class="legend" id="hzcosLg"></div>
@@ -196,11 +195,13 @@ tr.jump:hover td{background:var(--accent-soft)}
       </div></div>
     <div class="sec" data-sec="planagg"><h2 class="sechead"><span class="caret">&#9662;</span>Disagreement between consecutive plans</h2>
       <div class="secbody">
+        <div class="legend" id="aggLg"></div>
         <div class="panel" style="cursor:default"><canvas id="aggcv" height="220"></canvas></div>
         <div class="note">How far apart two consecutive chunks are about the same instant, by how many steps past the switch it is. Line = median over every chunk pair, band = p10&ndash;p90. Flat and low means each new plan continues the old one.</div>
       </div></div>
     <div class="sec" data-sec="planjoints"><h2 class="sechead"><span class="caret">&#9662;</span>Every plan, per joint</h2>
       <div class="secbody">
+        <div class="legend" id="planLegend"></div>
         <div class="note" id="planHint" style="margin-bottom:6px"></div>
         <div class="grid" id="plangrid"></div>
       </div></div>
@@ -414,8 +415,8 @@ function drawPanel(cv,j,big){
   if($("cbBounds").checked)
     for(let k=0;k<bounds.length;k++) if(bounds[k]>=t0&&bounds[k]<=t1) vb.push(k);
   if(vb.length){
-    g.strokeStyle=css("--cmd"); g.lineWidth=.6;
-    g.globalAlpha=vb.length>40?.15:.45;
+    g.strokeStyle=css("--bound"); g.lineWidth=1;
+    g.globalAlpha=vb.length>40?.3:.7;
     g.beginPath();
     vb.forEach(k=>{g.moveTo(X(bounds[k]),padT);g.lineTo(X(bounds[k]),padT+ih)});
     g.stroke(); g.globalAlpha=1;
@@ -423,8 +424,11 @@ function drawPanel(cv,j,big){
   sers.forEach(s=>drawSeries(g,s,X,Y,s.i0,s.i1,iw));
   // mid zoom: chunk labels; close zoom: splice size in mrad
   const rawA=runs[runA].raw;
-  if(vb.length&&vb.length<=14){
-    g.fillStyle=css("--cmd"); g.globalAlpha=.8;
+  // Labels need room, not just a small count: eleven "c12 Δ48.3mr" labels in a
+  // 250 px panel overlap into an unreadable band across the top. The enlarged
+  // view is four times wider and shows them.
+  if(vb.length&&vb.length<=14&&iw/vb.length>=58){
+    g.fillStyle=css("--bound"); g.globalAlpha=.95;
     vb.forEach(k=>{
       let lbl="c"+(bseq[k]!=null?bseq[k]:k);
       if(rawA&&runs[runA].dstep&&(view==="track"||view==="dcmd"||view==="err")){
@@ -639,7 +643,10 @@ $("cmpsel").onchange=e=>{runB=e.target.value; render()};
 document.querySelectorAll("#views button").forEach(b=>b.onclick=()=>{view=b.dataset.v; render()});
 document.querySelectorAll("#sides button").forEach(b=>b.onclick=()=>{side=b.dataset.s; render()});
 document.querySelectorAll("#pages button").forEach(b=>b.onclick=()=>{page=b.dataset.p; render()});
-$("cbBounds").onchange=scheduleRedraw; $("cbGrasp").onchange=scheduleRedraw;
+// render(), not scheduleRedraw: these two now appear in the legend, and
+// scheduleRedraw only repaints canvases — the legend is HTML.
+const onOverlayToggle=()=>{page==="signals"?render():scheduleRedraw()};
+$("cbBounds").onchange=onOverlayToggle; $("cbGrasp").onchange=onOverlayToggle;
 
 // ---- collapsible sections: click any heading to hide/show its content ----
 // Collapsed set persists per browser (best effort — private windows etc. may
@@ -719,7 +726,9 @@ function render(){
   if(view==="track")lg+=`<i style="background:${css("--act")}"></i>actual<i style="background:${css("--cmd")}"></i>commanded`;
   else lg+=`<i style="background:${css("--act")}"></i>${esc(runA)}`;
   if(runB)lg+=`<i style="background:${css("--b2")}"></i>${esc(runB)} (dashed)`;
-  lg+=`<span class="hint">scroll = zoom · drag = pan · double-click = reset · click a title to enlarge</span>`;
+  if($("cbBounds").checked)lg+=`<i style="background:${css("--bound")}"></i>chunk boundary`;
+  if($("cbGrasp").checked)lg+=`<i style="background:${css("--good")}"></i>holding something`;
+  lg+=`<span class="hint">click a plot to enlarge it — scroll to zoom and drag to pan inside</span>`;
   $("legend").innerHTML=lg;
   const grid=$("grid"); grid.innerHTML="";
   panelReg.length=0;
@@ -1172,8 +1181,9 @@ function fmtTick(v,unit){
 // Swatch legend rendered as HTML above the canvas, not painted inside it in
 // 9px type over the data.
 function legendHTML(items){
-  return items.map(i=>'<i style="background:'+css(i.color)+
-    (i.dash?';height:0;border-top:2px dashed '+css(i.color):"")+'"></i>'+esc(i.label)).join("");
+  return items.map(i=>'<i style="background:'+css(i.color)
+    +(i.alpha!=null?';opacity:'+i.alpha+';outline:1px solid '+css(i.color):"")
+    +(i.dash?';height:0;border-top:2px dashed '+css(i.color):"")+'"></i>'+esc(i.label)).join("");
 }
 
 function drawAcrossHorizon(cv,series,opts){
@@ -1330,7 +1340,9 @@ function drawPredCharts(){
     {color:"--accent",label:"executed"},{color:"--ghost",label:"skipped (prefetch cut)"},
     {color:"--tail",label:"discarded tail"}]);
   if(lga)lga.innerHTML=legendHTML([{color:"--act",label:"movement per step (mrad)"},
-    {color:"--warn",label:"acceleration (mrad/tick²)"}]);
+    {color:"--warn",label:"acceleration (mrad/tick²)"},
+    {color:"--accent",label:"executed"},{color:"--ghost",label:"skipped (prefetch cut)"},
+    {color:"--tail",label:"discarded tail"}]);
   if(cos)drawAcrossHorizon(cos,P?[{v:P.dircos_k,color:"--cmd",label:"direction cosine",dp:2,unit:""}]:[{v:[],color:"--cmd",label:"",dp:2}],
     {ymin:-1,ymax:1,unit:"cos",height:230,markUsable:true,
      refs:[{v:DIRCOS_REF,color:"--good"}]});
@@ -1344,6 +1356,13 @@ function drawPredCharts(){
 
 function drawAgg(){
   const cv=$("aggcv"); if(!cv||page!=="plans")return;
+  const alg=$("aggLg");
+  if(alg)alg.innerHTML=legendHTML([
+    {color:"--act",label:"median over every chunk pair"},
+    {color:"--act",label:"p10–p90 band",alpha:.22},
+    {color:"--accent",label:"executed"},{color:"--ghost",label:"skipped (prefetch cut)"},
+    {color:"--tail",label:"discarded tail"},
+    {color:"--cut",label:"prefetch cut"}]);
   const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=220;
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
@@ -1386,11 +1405,11 @@ function drawAgg(){
     g.fillStyle=css("--muted");g.textAlign="right";g.fillText(fmtTick(v),padL-6,y+3);g.textAlign="left";
   });
   g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
-  g.fillStyle=css("--accent");g.globalAlpha=.16;g.beginPath();
+  g.fillStyle=css("--act");g.globalAlpha=.22;g.beginPath();
   agg.k.forEach((kk,i)=>{const x=X(kk),y=Y(agg.p90[i]); i?g.lineTo(x,y):g.moveTo(x,y)});
   for(let i=agg.k.length-1;i>=0;i--)g.lineTo(X(agg.k[i]),Y(agg.p10[i]));
   g.closePath();g.fill();g.globalAlpha=1;
-  g.strokeStyle=css("--accent");g.lineWidth=1.6;g.beginPath();
+  g.strokeStyle=css("--act");g.lineWidth=2;g.beginPath();
   agg.k.forEach((kk,i)=>{const x=X(kk),y=Y(agg.p50[i]); i?g.lineTo(x,y):g.moveTo(x,y)});
   g.stroke();
   g.fillStyle=css("--muted");
