@@ -745,7 +745,10 @@ function renderTables(){
   fh+=row("stalls >100ms / time stalled",sc.stall_count!=null?`${sc.stall_count} / ${(100*(sc.stalled_frac||0)).toFixed(1)}%`:null);
   fh+=row("starved ticks (buffer=0)",sc.starved_ticks);
   fh+=row("effective rate (Hz)",sc.effective_hz);
-  fh+=row("RTC applied (fraction of chunks)",sc.rtc_applied_frac);
+  // Named for what the client can actually observe. It logs that a request
+  // CARRIED the previous chunk, not that the server did anything with it —
+  // a stock GR00T server drops `options` and never runs RTC.
+  fh+=row("previous chunk sent back (fraction of requests)",sc.rtc_applied_frac);
   fh+=row("cmd step within / at splice (mrad)",sm.step_within_p50!=null?`${sm.step_within_p50} / ${dash(sm.step_splice_p50)}`:null);
   fh+=row("splice ratio",sm.splice_ratio!=null?`×${sm.splice_ratio}${sm.splice_ratio>=V_SPLICE?" ⚠":""}${runs[runA].meta.stalled_run?" (spans a stall — compare with blocking runs only)":""}`:null);
   fh+=row("splice p95 / max (mrad)",sm.splice_p95!=null?`${sm.splice_p95} / ${sm.splice_max} (chunk ${sm.splice_max_seq})`:null,sm.splice_max_seq);

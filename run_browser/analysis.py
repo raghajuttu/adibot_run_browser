@@ -467,6 +467,10 @@ def _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg: Options) -> dict:
     sk = _opt_series(df, col["skip_steps"])
     if sk is not None and sk.notna().any():
         out["skip_logged_p50"] = _pct(sk.dropna().values, 50)
+    # Fraction of requests that carried the previous chunk back. This says the
+    # client SENT it, not that the server used it: RTC lives in the action head
+    # and a stock Gr00tPolicy discards `options`, so unless the server has been
+    # patched this can read 1.0 while no RTC ever runs.
     rtc = _opt_series(df, col["rtc_applied"])
     if rtc is not None and rtc.notna().any():
         v = rtc.dropna().values.astype(float)

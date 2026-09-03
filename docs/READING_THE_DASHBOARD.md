@@ -229,8 +229,16 @@ truncation this is a distribution, not a constant), *skip on arrival*
 its prediction the run actually played; p95 is the number to watch),
 *stalls* (tick gaps > 100 ms: expected in a blocking run, **starvation** in a
 prefetch run), *starved ticks* (`buffer_len` hit 0), *effective rate*, and
-*RTC applied* (fraction of chunks that really carried a previous chunk — the
-first one never does).
+*previous chunk sent back* (fraction of requests that carried the previous
+chunk — the first one never does).
+
+> ⚠ **"Previous chunk sent back" is not "RTC ran."** RTC lives in the model's
+> action head and is only triggered when the server forwards `options` to it.
+> A stock `Gr00tPolicy` accepts `options` and discards it (its own docstring
+> says *"currently unused"*), so with an unpatched server this row can read
+> 1.0 while no inpainting happens at all and `rtc_overlap_steps` /
+> `rtc_frozen_steps` / `rtc_ramp_rate` have no effect. Verify before
+> attributing any smoothness change to RTC.
 
 **Smoothness** (arm joints only; grippers step sharply by design) —
 *cmd step within / at splice* and their ratio: the **splice ratio**, the
