@@ -285,6 +285,10 @@ def process_run(
     run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, cfg)
     run["plans"] = _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg)
     run["pred"] = _prediction(chunk_data, names, cfg)
+    run["nvidia"] = _nvidia_jitter(chunk_data, df, names, hi, seq, cfg)
+    run["measured"] = _measured_jitter(df, names, cfg)
+    run["verdict"] = _jitter_verdict(run["nvidia"], run["measured"], run["pred"],
+                                     run["smooth"], cfg)
     return run
 
 
@@ -985,6 +989,220 @@ def _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg: Options)
             "n": [len(per_off[k]) for k in ks],
         }
     return store
+
+
+# ------------------------------------------- the deployment guide's metrics
+def _nvidia_jitter(chunk_data, df, names, hi, seq, cfg: Options) -> dict | None:
+    """The three quantitative metrics from the guide's jitter section, computed
+    as written: L2 norm across the joint dimension, unweighted mean, every
+    joint included.
+
+    They are kept separate from this dashboard's own smoothness numbers rather
+    than merged with them, because they are different quantities and averaging
+    the two conventions would give a figure that matches neither. The
+    dashboard pools with a max across arm joints and takes medians, which is
+    more robust to one bad joint and to the odd outlier chunk; the guide takes
+    an L2 norm over all joints and a flat mean, which is what any number you
+    compare against from NVIDIA will be. Both are reported.
+
+    THE PREFETCH CAVEAT, which the guide does not cover.
+    Metrics 2 and 3 are written for a client that executes a chunk from step 0.
+    Under prefetch the steps that expired while the request was in flight are
+    skipped, so step 0 of the new chunk is a position the arm was never sent
+    and the seam the formula measures never happened. Both are therefore
+    reported twice: `_doc` follows the formula literally, and `_exec` uses the
+    steps this run actually joined - the last step it really executed from the
+    old chunk, against the first step it really executed from the new one. On
+    a blocking run (skip 0) the two coincide.
+    """
+    col = cfg.column_names
+    if chunk_data is None:
+        return None
+    chunks = chunk_data.get("chunks")
+    if chunks is None or getattr(chunks, "ndim", 0) != 3 or chunks.shape[0] < 2:
+        return None
+    if chunks.shape[2] != len(names):
+        return None
+    H = int(chunks.shape[1])
+    cseq = np.asarray(chunk_data["seq"]).astype(int).ravel()
+    by_seq = {int(v): k for k, v in enumerate(cseq)}
+
+    def norm_last(v):
+        """L2 across the joint axis, NaN-safe (a padded step drops out)."""
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(np.nansum(v * v, axis=-1)) * np.where(
+                np.isfinite(v).any(axis=-1), 1.0, np.nan)
+
+    def mean_of(v):
+        v = np.asarray(v, dtype=float)
+        v = v[np.isfinite(v)]
+        return round(float(np.mean(v)) * 1000.0, 1) if len(v) else None
+
+    out: dict = {"chunks": int(chunks.shape[0]), "H": H}
+    arm_idx = [i for i, n in enumerate(names) if cfg.finger_marker not in n]
+
+    # -- Metric 1: mean intra-chunk acceleration magnitude -------------------
+    for label, idx in (("all", list(range(len(names)))), ("arm", arm_idx)):
+        if not idx:
+            continue
+        x = chunks[:, :, idx].astype(float)
+        vel = np.diff(x, axis=1)
+        acc = np.diff(vel, axis=1)
+        out[f"m1_accel_{label}"] = mean_of(norm_last(acc))
+
+    # Where each chunk was really joined. depth = deepest step executed,
+    # skip = first step executed (both measured from the CSV, not configured).
+    depth: dict[int, int] = {}
+    first: dict[int, int] = {}
+    for i in range(len(df)):
+        if not (np.isfinite(seq[i]) and np.isfinite(hi[i])):
+            continue
+        sq, k = int(seq[i]), int(hi[i])
+        depth[sq] = max(depth.get(sq, -1), k)
+        first[sq] = min(first.get(sq, 10**9), k)
+
+    ex = sorted(sq for sq in depth if sq in by_seq)
+    pairs = [(a, b) for a, b in zip(ex[:-1], ex[1:])]
+    out["pairs"] = len(pairs)
+    if not pairs:
+        return out
+
+    # execute_steps for the literal form: how many steps a chunk ran, median.
+    counts = [depth[sq] - first[sq] + 1 for sq in ex]
+    e_steps = int(np.median(counts)) if counts else H
+    e_steps = max(2, min(e_steps, H))
+    out["execute_steps"] = e_steps
+    out["skip_p50"] = int(np.median([first[sq] for sq in ex])) if ex else 0
+
+    jump_doc, jump_exec, cos_doc, cos_exec = [], [], [], []
+    for a, b in pairs:
+        ca, cb = chunks[by_seq[a]].astype(float), chunks[by_seq[b]].astype(float)
+        # --- Metric 2 / 3, literal: chunks[i][exec-1] vs chunks[i+1][0..1]
+        pa, pb = ca[e_steps - 1], cb[0]
+        if np.isfinite(pa).all() and np.isfinite(pb).all():
+            jump_doc.append(float(np.linalg.norm(pb - pa)))
+            ve, vs = ca[e_steps - 1] - ca[e_steps - 2], cb[1] - cb[0]
+            cos_doc.append(float(ve @ vs / (np.linalg.norm(ve) * np.linalg.norm(vs) + 1e-8)))
+        # --- Metric 2 / 3, as this run actually joined the two chunks
+        da, sb = depth[a], first[b]
+        if da >= 1 and sb + 1 < H:
+            qa, qb = ca[da], cb[sb]
+            if np.isfinite(qa).all() and np.isfinite(qb).all():
+                jump_exec.append(float(np.linalg.norm(qb - qa)))
+                ve, vs = ca[da] - ca[da - 1], cb[sb + 1] - cb[sb]
+                cos_exec.append(float(ve @ vs / (np.linalg.norm(ve) * np.linalg.norm(vs) + 1e-8)))
+
+    out["m2_jump_doc"] = mean_of(jump_doc)
+    out["m2_jump_exec"] = mean_of(jump_exec)
+    # cosines are unitless: mean_of scales by 1000, so take these plainly
+    for key, vals in (("m3_cos_doc", cos_doc), ("m3_cos_exec", cos_exec)):
+        v = np.asarray(vals, dtype=float)
+        v = v[np.isfinite(v)]
+        out[key] = round(float(np.mean(v)), 3) if len(v) else None
+    return out
+
+
+def _measured_jitter(df, names, cfg: Options) -> dict:
+    """The same smoothness questions asked of the MEASURED joint stream.
+
+    Nothing else in this dashboard looks at actual_pos_ this way, and without
+    it the guide's Case C - "the chunks look smooth, the robot still shakes" -
+    has no number at all and cannot be told apart from a clean run. It is also
+    the only measurement here that reflects what a person watching the arm
+    actually sees: a command can zigzag every tick and never reach the joints,
+    because the arm's inertia and the low-level controller filter it.
+    """
+    col = cfg.column_names
+    arm = [n for n in names if cfg.finger_marker not in n]
+    cols = [f"{col['act_prefix']}{n}" for n in arm if f"{col['act_prefix']}{n}" in df.columns]
+    out: dict = {}
+    if len(cols) < 2 or len(df) < 4:
+        return out
+    x = df[cols].values.astype(float)
+    with np.errstate(invalid="ignore"):
+        d1 = np.diff(x, axis=0)
+        a, b = d1[:-1], d1[1:]
+        den = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
+        cos = np.where(den > 1e-12, (a * b).sum(axis=1) / np.maximum(den, 1e-12), np.nan)
+        acc = np.linalg.norm(np.diff(d1, axis=0), axis=1)
+        step = np.linalg.norm(d1, axis=1)
+
+    def med(v, dp=1, scale=1000.0):
+        v = np.asarray(v, dtype=float)
+        v = v[np.isfinite(v)]
+        return round(float(np.median(v)) * scale, dp) if len(v) else None
+
+    out["dircos"] = med(cos, 3, 1.0)
+    out["accel"] = med(acc)
+    out["step"] = med(step)
+    fin = cos[np.isfinite(cos)]
+    if len(fin):
+        out["reversal_frac"] = round(float((fin < 0).mean()), 3)
+    return out
+
+
+def _jitter_verdict(nv: dict | None, meas: dict, pred: dict | None,
+                    smooth: dict, cfg: Options) -> dict | None:
+    """Which of the guide's three cases this run falls under, and why.
+
+    The guide's decision tree starts from "where is the jitter" and assumes a
+    ragged chunk means a shaking robot. It has no branch for the case these
+    logs actually show - a plan that zigzags while the arm stays smooth -
+    so that is reported explicitly rather than forced into Case A, because
+    the remedy is different: nothing needs fixing.
+
+    Everything is judged against the demonstrations (dircos_reference) and
+    against the run's own movement scale, never against an absolute number
+    invented here: what counts as a large acceleration depends entirely on how
+    fast the robot is moving.
+    """
+    if not meas or meas.get("dircos") is None:
+        return None
+    robot_ok = meas["dircos"] >= cfg.measured_smooth_min
+    plan_cos = (pred or {}).get("dircos_p50")
+    seam_cos = (nv or {}).get("m3_cos_exec")
+    if seam_cos is None:
+        seam_cos = smooth.get("dircos_splice")
+    plan_bad = plan_cos is not None and plan_cos < cfg.dircos_warn_below
+    seam_bad = seam_cos is not None and seam_cos < cfg.dircos_warn_below
+
+    v = {"robot_dircos": meas["dircos"], "plan_dircos": plan_cos, "seam_dircos": seam_cos}
+    if robot_ok and (plan_bad or seam_bad):
+        v["case"] = "none"
+        v["title"] = "no visible jitter — the plan is ragged, the arm is not"
+        v["why"] = (f"The measured joints keep direction continuity {meas['dircos']} "
+                    f"(demonstrations {cfg.dircos_reference}), so the shake in the "
+                    f"command never reaches them. Chasing the plan's smoothness "
+                    f"would be optimising a number the robot filters out.")
+    elif robot_ok:
+        v["case"] = "none"
+        v["title"] = "smooth — plan and arm both clean"
+        v["why"] = f"Measured direction continuity {meas['dircos']}; nothing to diagnose."
+    elif plan_bad and not seam_bad:
+        v["case"] = "A"
+        v["title"] = "Case A — jitter inside each chunk"
+        v["why"] = (f"The plan itself turns nearly every step (cosine {plan_cos}) while "
+                    f"the seam between chunks is comparatively clean ({seam_cos}). "
+                    f"The guide's remedy is data and training, not scheduling.")
+    elif seam_bad and not plan_bad:
+        v["case"] = "B"
+        v["title"] = "Case B — jitter between chunks"
+        v["why"] = (f"Inside a chunk the plan holds together (cosine {plan_cos}) but the "
+                    f"join between chunks reverses ({seam_cos}). The guide's remedy is "
+                    f"state-relative actions or a chunk-blending strategy.")
+    elif seam_bad and plan_bad:
+        v["case"] = "A+B"
+        v["title"] = "Case A and B — ragged plans, joined badly"
+        v["why"] = (f"Both the inside of a chunk ({plan_cos}) and the join between "
+                    f"chunks ({seam_cos}) are below {cfg.dircos_warn_below}. Fix the "
+                    f"model first: a smoother plan usually improves the seam too.")
+    else:
+        v["case"] = "C"
+        v["title"] = "Case C — robot or low-level control"
+        v["why"] = (f"The predicted chunks are smooth (plan {plan_cos}, seam {seam_cos}) "
+                    f"but the measured joints are not ({meas['dircos']}). The guide "
+                    f"points at drive control, interpolation and hardware status.")
+    return v
 
 
 # ------------------------------------------------ what the model itself emitted
