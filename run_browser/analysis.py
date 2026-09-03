@@ -544,6 +544,46 @@ def _smoothness(df, names, new_chunk, dt_ms, cfg: Options) -> dict:
         if touches.any():
             out["rev_joints_splice_p50"] = _med(rev_n[touches])
         out["rev_joints_within_p50"] = _med(rev_n[~touches])
+
+    # Direction continuity (NVIDIA's "momentum shift"): cosine between the
+    # command's velocity vector before and after a moment. +1 means the motion
+    # carries straight on; 0 is a right-angle turn; negative means it reverses.
+    # Human demonstrations sit near +0.97, so this is the most direct measure
+    # of whether the policy's output is a trajectory or a zigzag.
+    #
+    # Two numbers, because they answer different questions:
+    #   within  - both steps inside one chunk. Low here means the MODEL is
+    #             noisy (jitter inside a chunk), which no scheduling strategy
+    #             can fix.
+    #   splice  - last step of the old chunk vs first step of the new one,
+    #             skipping the crossing step itself, exactly as the deployment
+    #             guide defines it. Low only here means a seam problem.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        vp, vn = d1[:-1], d1[1:]
+        denom = np.linalg.norm(vp, axis=1) * np.linalg.norm(vn, axis=1)
+        cos = np.where(denom > 1e-12, (vp * vn).sum(axis=1) / np.maximum(denom, 1e-12), np.nan)
+    # A pair sits wholly inside a chunk when neither of its two steps crosses
+    # a switch, i.e. rows i+1 and i+2 both continue the current chunk.
+    def _med3(x) -> float | None:
+        """Median rounded to 3 dp — a cosine needs more resolution than the
+        1 dp _med used for millirad quantities."""
+        with np.errstate(invalid="ignore"):
+            v = float(np.nanmedian(x)) if len(x) else float("nan")
+        return round(v, 3) if np.isfinite(v) else None
+
+    inside = ~(new_chunk[1:-1] | new_chunk[2:])
+    if inside.any():
+        out["dircos_within"] = _med3(cos[inside])
+    # Momentum across a switch: for a chunk starting at row s, compare the old
+    # chunk's last step (d1[s-2]) with the new chunk's first step (d1[s]).
+    starts = np.where(new_chunk)[0]
+    starts = starts[(starts >= 2) & (starts + 1 < len(cmds))]
+    if len(starts):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            a_, b_ = d1[starts - 2], d1[starts]
+            den2 = np.linalg.norm(a_, axis=1) * np.linalg.norm(b_, axis=1)
+            cos_b = np.where(den2 > 1e-12, (a_ * b_).sum(axis=1) / np.maximum(den2, 1e-12), np.nan)
+        out["dircos_splice"] = _med3(cos_b)
     # Velocity spike near splices, apples to apples: the same windowed-max
     # statistic is taken at splices and everywhere, and the ratio of their
     # medians is reported (max-at-splice over global median would inflate).
