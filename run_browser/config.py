@@ -124,6 +124,18 @@ class Options:
     splice_window_ticks: int = 3
     """Half-window around a chunk switch for the velocity-spike check."""
 
+    dircos_reference: float = 0.97
+    """Direction continuity of the training demonstrations, shown beside the
+    measured value as the target. Cosine between consecutive command steps:
+    +1 = motion carries straight on, 0 = right-angle turn, negative = the
+    command reverses. Measured at 0.973 over 20 adibot episodes; re-measure
+    on your own dataset if you change robots."""
+
+    dircos_warn_below: float = 0.5
+    """Direction continuity at or below this is flagged. A policy far below
+    its demonstrations is emitting a zigzag rather than a trajectory, which
+    is a model problem no scheduling strategy can fix."""
+
     # ------------------------------------------------------- grasp attempts
     grasp_close_frac: float = 0.35
     """A finger counts as commanded-closed when its command drops below this
