@@ -119,6 +119,18 @@ class Options:
     smear. Wider than this, it shows the executed command and asks you to
     zoom."""
 
+    chunk_align_tol_rad: float = 1e-4
+    """How far the chunk store may differ from the commands the CSV recorded
+    before the store is rejected as belonging to a different run. Both are
+    written from the same float64 value by different code in the client, so
+    genuine agreement is ~1e-9; this is loose enough for float32 rounding and
+    far tighter than any joint mix-up."""
+
+    chunk_align_chunks: int = 25
+    """How many chunks the alignment check samples. The failure it guards
+    against — a store from another run — is wrong everywhere, so a sample
+    settles it; a long run need not be walked end to end at build time."""
+
     chunks_suffix: str = ".chunks.npz"
     """Full-chunk store: <run>.csv -> <run>.chunks.npz (logger with
     log_chunks, post-v0.5). Holds every action chunk including the unexecuted
