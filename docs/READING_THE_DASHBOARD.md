@@ -304,6 +304,31 @@ model output is noisy everywhere and the mechanics are filtering it. Compare
 the commanded step against the arm's actual step to see how much of the
 command noise reaches the joints at all.
 
+**Model plan (runs with a `.chunks.npz`)** — the same question asked of the
+policy's *own output* instead of the executed stream. The rows above are
+measured on the command that reached the arm, which is a stitched-together
+selection of steps from many chunks; these read the raw 40-step chunks one at
+a time, so the execution horizon, the prefetch skip and where the boundaries
+fell cannot influence them. This is the clean Case A test.
+
+- **direction continuity** — as above, but inside a single predicted chunk.
+- **steps that reverse** — the fraction of consecutive step pairs pointing
+  backwards. A median cosine near zero hides the difference between a steady
+  right-angle turn and an alternating forwards/backwards shake; this
+  separates them.
+- **acceleration** — the guide's intra-chunk metric,
+  `|x[k+1] - 2·x[k] + x[k-1]|`, shown beside the typical step size so you can
+  tell a genuinely fast move from a small one that is shaking.
+- **last usable horizon step** — the longest unbroken run of horizon steps
+  whose direction continuity holds at or above `dircos_usable_min` (0.8 by
+  default, in `config.py`). This is the part of the horizon the policy plans
+  coherently, and the window an execution horizon should stay inside. The
+  second line reports where the run actually executed — measured from the
+  prefetch cut to the deepest step reached, not the configured horizon — and
+  flags how many executed steps fell outside the coherent window.
+
+The per-step detail behind these is on the **plans** page (§11).
+
 **Safety** — the fraction of ticks where the limit guard held a side instead
 of publishing. A high rate invalidates the run's smoothness numbers: held
 ticks repeat the old command, which fakes smoothness.
@@ -428,11 +453,14 @@ chunk-profile plot; runs without the file show "—".
   stability number. The executed-only *splice ratio* sees one step of this;
   the overlap disagreement sees all ~24. Reported as p50/p95 over all chunk
   pairs plus the worst pair — click it to jump there.
-- **RTC frozen-region mismatch** — with RTC on, the first `rtc_frozen_steps`
-  of each new chunk should *equal* the previous chunk at those instants.
-  This reports the actual mismatch in mrad; near zero means the server
-  honoured the freeze, anything larger means RTC is not doing what its
-  parameters claim.
+- **Steps RTC asked to freeze, actual change** — with `rtc_enable` on, the
+  first `rtc_frozen_steps` of each new chunk should *equal* the previous
+  chunk at those instants. This reports how much they actually changed, in
+  mrad. Near zero would mean the freeze took effect. On a stock GR00T server
+  it never does — `Gr00tPolicy.get_action` documents `options` as unused and
+  rebuilds the observation from video/state/language alone, discarding the
+  chunk the client attached — so a large value here is the *evidence* that
+  the request was dropped, and RTC runs are plain async inference.
 - **Discarded-tail error** — each chunk's unexecuted steps compared against
   what was *actually commanded* at those instants by later chunks, drawn as
   the dotted amber line on the chunk-profile plot (by `horizon_idx`, hover
@@ -445,6 +473,32 @@ chunk-profile plot; runs without the file show "—".
 The third page draws the predictions themselves, and is where the schedule
 becomes visible rather than numeric.
 
+**What the model predicted — quality across the horizon** (top of the page).
+Two charts measuring the policy's raw output at *each step of the horizon*,
+so the depth-dependence is visible instead of pooled into one number. Both
+shade the horizon by region and bracket the coherent stretch in green.
+
+The first is direction continuity per step: near **+1** the plan carries
+straight on, **0** is a right-angle turn every tick, **below 0** it doubles
+back on itself. The dashed line is the training demonstrations.
+
+The second is how far the plan moves per tick and its acceleration.
+Acceleration rising while movement stays flat means the plan is shaking
+rather than travelling.
+
+**Why this shape matters.** A policy is not uniformly good across its
+horizon. The early steps can be unsettled, a middle stretch clean, and the
+deep tail noise — because the far end of the horizon is extrapolation the
+model was never strongly supervised on. Pooling hides all of it: a run whose
+plan is excellent at k=8–17 and noise past k=18 reports the same mediocre
+median as one that is uniformly mediocre, and they need opposite fixes. Read
+the green bracket, then check whether the run's executed span sits inside it
+(Run facts spells this out). If it does not, the arm is being driven with the
+part of the plan the model was no longer predicting a trajectory in — which
+is a scheduling fix (execute less deeply, or infer more often), not a
+retraining one. If the bracket is short or absent everywhere, the plan is
+noisy end to end, and that *is* a model or data problem.
+
 **Every plan, per joint** — one panel per joint. Each faint line is one whole
 chunk, drawn on the time axis from the instant it was planned for, so
 consecutive chunks physically overlap where they describe the same moments.
@@ -455,19 +509,16 @@ Each plan is coloured by region:
 
 | colour | region | meaning |
 |---|---|---|
-| light blue | RTC frozen | the server was told to keep these identical to the previous chunk |
-| teal-green | RTC ramp | the blend region between frozen and free |
 | grey | skipped | expired in flight, discarded on arrival |
 | solid teal | executed | actually drove the arm |
 | grey dashed | discarded tail | predicted, then replaced by the next chunk |
 | **solid red line** | the prefetch cut | everything left of it was skipped |
 | red dashed line | superseded | where the next chunk took over |
 
-**One thing to look for immediately:** if the solid red prefetch cut sits to
-the *right* of the light-blue frozen band, RTC's frozen steps were all
-discarded before they could drive anything — the freeze is configured but
-never reaches the arm. That is `rtc_frozen_steps` being smaller than the skip,
-and it is invisible in every other view.
+There is deliberately no "RTC frozen" or "RTC ramp" band. Setting
+`rtc_enable` only makes the *client* send the previous chunk back; the stock
+server drops it (see the frozen-region row above). Shading a band "frozen"
+would claim the model was constrained there when nothing constrained it.
 
 Plans are drawn only when the visible window is short (8 s by default,
 `plans_window_s`) — a whole run of overlaid chunks is an unreadable smear.
