@@ -274,6 +274,14 @@ def process_run(
     run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
     run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
     run["violations"] = _violation_rates(df, run_meta, cfg)
+    # Everything below that reads the chunk store must see a store that
+    # provably belongs to THIS run — see _chunk_store_matches.
+    if chunk_data is not None:
+        why = _chunk_store_matches(chunk_data, df, names, hi, seq, cfg)
+        if why:
+            run["chunk_reject"] = why
+            chunk_data = None
+
     run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, cfg)
     run["plans"] = _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg)
     run["pred"] = _prediction(chunk_data, names, cfg)
@@ -700,6 +708,84 @@ def _violation_rates(df, run_meta: dict | None, cfg: Options) -> dict:
             if len(s):
                 out[key] = round(float(s.values.astype(float).mean()), 4)
     return out
+
+
+# --------------------------------------------- does this store belong to this run
+def _chunk_store_matches(chunk_data, df, names, hi, seq, cfg: Options) -> str | None:
+    """None if the chunk store provably belongs to this run; else why it does not.
+
+    A `.chunks.npz` is matched to a CSV by filename alone, which is not
+    evidence. A store left behind by an earlier client, an aborted run, or a
+    different experiment sits next to the CSV looking exactly like a good one,
+    and every metric derived from it — the plan's direction continuity, its
+    acceleration, the usable horizon window, the overlap disagreement — comes
+    out confident and wrong. That is worse than no store at all, because "no
+    store" shows as an em dash and a wrong store shows as a number.
+
+    The proof is already in the log, written twice by different code in the
+    client. Each executed tick records the command as cmd_<joint> on its CSV
+    row; the store records the same value as chunks[seq][horizon_idx]. If they
+    agree across many chunks then the column order, the sequence indexing and
+    the horizon indexing are all right, and the store is this run's. If they
+    disagree, nothing else about the store can be trusted either.
+
+    Deliberately a rejection, not a warning. The whole point is that these
+    numbers look plausible when they are wrong, so a note nobody reads is not
+    a guard.
+    """
+    col = cfg.column_names
+    chunks = chunk_data.get("chunks") if isinstance(chunk_data, dict) else None
+    if chunks is None or getattr(chunks, "ndim", 0) != 3 or chunks.shape[0] == 0:
+        return "chunk store is empty or malformed"
+    if chunks.shape[2] != len(names):
+        return (f"chunk store is {chunks.shape[2]} joints wide but the CSV names "
+                f"{len(names)} — it was written for a different robot or layout")
+
+    cseq = np.asarray(chunk_data["seq"]).astype(int).ravel()
+    by_seq = {int(s): k for k, s in enumerate(cseq)}
+    logged = {int(s) for s in np.unique(seq) if np.isfinite(s)}
+    shared = logged & set(by_seq)
+    if not shared:
+        return (f"chunk store holds sequences {cseq.min()}-{cseq.max()} but the run "
+                f"executed {min(logged)}-{max(logged)} — no overlap at all")
+
+    cmd = df[[f"{col['cmd_prefix']}{n}" for n in names]].values.astype(float)
+    worst, worst_at, checked = 0.0, None, 0
+    seen: set[int] = set()
+    for i in range(len(df)):
+        if not np.isfinite(seq[i]) or not np.isfinite(hi[i]):
+            continue
+        s = int(seq[i])
+        if s not in by_seq:
+            continue
+        if s not in seen:
+            if len(seen) >= cfg.chunk_align_chunks:
+                continue
+            seen.add(s)
+        k = int(hi[i])
+        c = chunks[by_seq[s]]
+        if not 0 <= k < c.shape[0]:
+            continue
+        a, b = np.asarray(c[k], float), cmd[i]
+        m = np.isfinite(a) & np.isfinite(b)
+        if not m.any():
+            continue
+        e = float(np.max(np.abs(a[m] - b[m])))
+        checked += 1
+        if e > worst:
+            worst, worst_at = e, (s, k, i)
+    if not checked:
+        return "chunk store shares sequence numbers with the run but no comparable step"
+    if worst > cfg.chunk_align_tol_rad:
+        s, k, i = worst_at
+        a = np.asarray(chunks[by_seq[s]][k], float)
+        with np.errstate(invalid="ignore"):
+            j = int(np.nanargmax(np.abs(a - cmd[i])))
+        return (f"chunk store disagrees with the commands this run actually sent: "
+                f"chunk {s} step {k} has {names[j]} at {a[j]:.4f} rad where the log "
+                f"commanded {cmd[i][j]:.4f} ({worst * 1000:.0f} mrad apart). "
+                f"The file does not belong to this run — plan metrics withheld.")
+    return None
 
 
 # ------------------------------------------------- full-chunk overlap metrics
