@@ -166,8 +166,8 @@ class Options:
 
     grasp_rise_fracs: tuple = (0.1, 0.9)
     """Fractions of the finger range bounding the close rise-time measurement
-    (command falling from 90% open to 10% open). RTC ramping lengthens this —
-    it is the 'is RTC smearing the grasp' test."""
+    (command falling from 90% open to 10% open). A slow rise means the close
+    was smeared over many ticks instead of commanded crisply."""
 
     grasp_min_range: float = 0.005
     """A finger whose commanded range over the run is below this (rad) is
