@@ -32,21 +32,25 @@ Two consequences show up all over the dashboard:
 `inference_seq` in the CSV numbers the chunks; `horizon_idx` says which step
 of its chunk each tick executed.
 
-### Prefetch and RTC runs (client v0.4+)
+### Prefetch runs (client v0.4+)
 
-Two per-run options change the picture, and logs of all kinds can sit in the
-same folder:
+**Prefetch** changes the picture, and logs of all kinds can sit in the same
+folder. The next chunk is requested on a background thread while the current
+one is still playing, so the arm never stops. Because the round trip
+(~270 ms ≈ 8–9 steps) elapses while the arm keeps moving, the steps that went
+stale in flight are **skipped** on arrival: a chunk's first executed
+`horizon_idx` is typically 7–12, not 0. Chunks are also **truncated** — a
+fresh chunk replaces whatever was left of the old buffer — so executed
+steps-per-chunk varies.
 
-- **Prefetch** — the next chunk is requested on a background thread while the
-  current one is still playing, so the arm never stops. Because the round
-  trip (~270 ms ≈ 8–9 steps) elapses while the arm keeps moving, the steps
-  that went stale in flight are **skipped** on arrival: a chunk's first
-  executed `horizon_idx` is typically 7–12, not 0. Chunks are also
-  **truncated** — a fresh chunk replaces whatever was left of the old buffer
-  — so executed steps-per-chunk varies.
-- **RTC** — each request carries the previous chunk back, and the server
-  grows the new chunk out of it instead of from scratch, to smooth the seam
-  between chunks.
+**A note on `rtc_enable`.** Runs configured with it are read as plain
+prefetch runs, because that is what they are. The flag only makes the
+*client* attach the previous chunk to its request; a stock GR00T server
+discards it (`Gr00tPolicy.get_action` documents `options` as unused and
+rebuilds the observation from video/state/language alone). The config line
+notes the flag was set, and nothing else in the dashboard treats such a run
+as different. RTC-specific metrics live on the `feat/rtc-metrics` branch,
+ready to return if the server is ever patched to honour the request.
 
 The dashboard detects boundaries from `inference_seq` changes (never from
 `horizon_idx == 0`), so all of it works for both kinds of run. In a prefetch
@@ -228,17 +232,7 @@ truncation this is a distribution, not a constant), *skip on arrival*
 `skip_steps`), *executed depth* (max `horizon_idx` per chunk — how deep into
 its prediction the run actually played; p95 is the number to watch),
 *stalls* (tick gaps > 100 ms: expected in a blocking run, **starvation** in a
-prefetch run), *starved ticks* (`buffer_len` hit 0), *effective rate*, and
-*previous chunk sent back* (fraction of requests that carried the previous
-chunk — the first one never does).
-
-> ⚠ **"Previous chunk sent back" is not "RTC ran."** RTC lives in the model's
-> action head and is only triggered when the server forwards `options` to it.
-> A stock `Gr00tPolicy` accepts `options` and discards it (its own docstring
-> says *"currently unused"*), so with an unpatched server this row can read
-> 1.0 while no inpainting happens at all and `rtc_overlap_steps` /
-> `rtc_frozen_steps` / `rtc_ramp_rate` have no effect. Verify before
-> attributing any smoothness change to RTC.
+prefetch run), *starved ticks* (`buffer_len` hit 0) and *effective rate*.
 
 **Smoothness** (arm joints only; grippers step sharply by design) —
 *cmd step within / at splice* and their ratio: the **splice ratio**, the
@@ -386,11 +380,9 @@ Below the spans, every **close attempt** is listed with:
 
 - the **step** (`horizon_idx`) it was issued at — attempts issued deeper than
   the usable depth tend to fail, and this measures that directly across runs;
-- the **rise time** of the close command (10→90% of the drop) — RTC's
-  blending stretches commands, so a lengthening rise time is the test for
-  "RTC is smearing the grasp";
-- for RTC runs, whether the close landed **inside the RTC overlap region**
-  (the early steps the server blends with the previous chunk);
+- the **rise time** of the close command (10→90% of the drop) — a long rise
+  means the close was smeared over many ticks rather than commanded crisply,
+  which is what makes a grasp arrive too late to catch the object;
 - **✓ held / ✗ air** — whether the finger actually stopped on something.
 
 ---
@@ -398,7 +390,7 @@ Below the spans, every **close attempt** is listed with:
 ## 8. Run chips (top of the page)
 
 Per selected run: duration, number of chunks, the run kind
-(blocking / prefetch / prefetch+RTC — from the sidecar, or guessed from
+(blocking / prefetch — from the sidecar, or guessed from
 whether boundaries stall when there is none), request **latency** p50
 (`latency_ms` is the full round trip the robot measured around each chunk
 request), executed **depth p95**, the **splice ratio**, and the **stall
@@ -453,14 +445,6 @@ chunk-profile plot; runs without the file show "—".
   stability number. The executed-only *splice ratio* sees one step of this;
   the overlap disagreement sees all ~24. Reported as p50/p95 over all chunk
   pairs plus the worst pair — click it to jump there.
-- **Steps RTC asked to freeze, actual change** — with `rtc_enable` on, the
-  first `rtc_frozen_steps` of each new chunk should *equal* the previous
-  chunk at those instants. This reports how much they actually changed, in
-  mrad. Near zero would mean the freeze took effect. On a stock GR00T server
-  it never does — `Gr00tPolicy.get_action` documents `options` as unused and
-  rebuilds the observation from video/state/language alone, discarding the
-  chunk the client attached — so a large value here is the *evidence* that
-  the request was dropped, and RTC runs are plain async inference.
 - **Discarded-tail error** — each chunk's unexecuted steps compared against
   what was *actually commanded* at those instants by later chunks, drawn as
   the dotted amber line on the chunk-profile plot (by `horizon_idx`, hover
@@ -517,8 +501,8 @@ Each plan is coloured by region:
 
 There is deliberately no "RTC frozen" or "RTC ramp" band. Setting
 `rtc_enable` only makes the *client* send the previous chunk back; the stock
-server drops it (see the frozen-region row above). Shading a band "frozen"
-would claim the model was constrained there when nothing constrained it.
+server drops it. Shading a band "frozen" would claim the model was
+constrained there when nothing constrained it.
 
 Plans are drawn only when the visible window is short (8 s by default,
 `plans_window_s`) — a whole run of overlaid chunks is an unreadable smear.
