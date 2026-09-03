@@ -41,10 +41,10 @@ TEMPLATE = r"""<meta charset="utf-8">
 :root{--ground:#FBFCFD;--surface:#F2F5F7;--ink:#1C2733;--muted:#5A6B7A;--hairline:#DCE3E8;
 --accent:#0E7C86;--accent-soft:#E3F1F2;--warn:#A8600F;--warn-soft:#F7EBDB;--good:#3D7A46;
 --cmd:#d62728;--act:#1f77b4;--b2:#8a5fbf;
---cut:#D6453C;--ghost:#8A99A6;
+--cut:#1B2733;--ghost:#8A99A6;--tail:#7B5EA7;
 --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;--disp:"Archivo","Helvetica Neue",Arial,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#FF6B6B;--ghost:#5A6B7A}}
-:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#FF6B6B;--ghost:#5A6B7A}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#F2F7FA;--ghost:#5A6B7A;--tail:#b48be0}}
+:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#F2F7FA;--ghost:#5A6B7A;--tail:#b48be0}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);font-size:14px}
 .layout{display:flex;min-height:100vh}
@@ -186,9 +186,11 @@ tr.jump:hover td{background:var(--accent-soft)}
     <div class="legend" id="planLegend"></div>
     <div class="sec" data-sec="predq"><h2 class="sechead"><span class="caret">&#9662;</span>What the model predicted &mdash; quality across the horizon</h2>
       <div class="secbody">
-        <div class="panel" style="cursor:default"><canvas id="hzcos" height="200"></canvas></div>
+        <div class="legend" id="hzcosLg"></div>
+        <div class="panel" style="cursor:default"><canvas id="hzcos" height="230"></canvas></div>
         <div class="note">Direction continuity <b>inside a single predicted chunk</b>, at each step of the horizon. Nothing here depends on the execution horizon, the prefetch skip, or where the chunk boundaries fell &mdash; it is the policy's own output. Near <b>+1</b> the plan carries straight on; <b>0</b> is a right-angle turn every tick; <b>below 0</b> the plan doubles back on itself. Human demonstrations sit at the dashed line.</div>
-        <div class="panel" style="cursor:default;margin-top:10px"><canvas id="hzacc" height="180"></canvas></div>
+        <div class="legend" id="hzaccLg" style="margin-top:12px"></div>
+        <div class="panel" style="cursor:default"><canvas id="hzacc" height="205"></canvas></div>
         <div class="note">How far the plan moves per tick, and its acceleration (the deployment guide's intra-chunk metric). Acceleration rising while movement stays flat means the plan is shaking rather than travelling.</div>
       </div></div>
     <div class="sec" data-sec="planagg"><h2 class="sechead"><span class="caret">&#9662;</span>Disagreement between consecutive plans</h2>
@@ -954,7 +956,7 @@ function regionOf(k,skip,depth,cfg){
   if(depth>=0&&k<=depth)return "executed";
   return "tail";
 }
-const REGION_COLOR={skipped:"--ghost",executed:"--accent",tail:"--ghost"};
+const REGION_COLOR={skipped:"--ghost",executed:"--accent",tail:"--tail"};
 const REGION_LABEL={skipped:"skipped (prefetch cut)",
                     executed:"executed",tail:"discarded tail"};
 function planStore(){const P=runs[runA].plans; return (P&&!P.omitted)?P:null}
@@ -1073,84 +1075,129 @@ function drawPlanPanel(cv,j){
 // function.
 //   series: [{v:[...], color:"--accent", label:"…", dash:bool, dp:int}]
 //   opts:   {ymin, ymax, unit, refs:[{v,color,label}], height}
+// Round tick values covering [lo,hi] at roughly `want` intervals, so a reader
+// can put a number on any point instead of interpolating between the two
+// endpoint labels the earlier version drew.
+function niceTicks(lo,hi,want){
+  const span=hi-lo; if(!(span>0))return [lo];
+  const raw=span/Math.max(want,1), mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const step=[1,2,2.5,5,10].map(m=>m*mag).find(v=>v>=raw)||10*mag;
+  const out=[]; for(let v=Math.ceil(lo/step)*step; v<=hi+1e-9; v+=step)out.push(Math.round(v/step)*step);
+  return out;
+}
+function fmtTick(v,unit){
+  const a=Math.abs(v);
+  const s=a>=100?v.toFixed(0):a>=10?v.toFixed(1):v.toFixed(2).replace(/0$/,"");
+  return s.replace(/\.0+$/,"");
+}
+// Swatch legend rendered as HTML above the canvas, not painted inside it in
+// 9px type over the data.
+function legendHTML(items){
+  return items.map(i=>'<i style="background:'+css(i.color)+
+    (i.dash?';height:0;border-top:2px dashed '+css(i.color):"")+'"></i>'+esc(i.label)).join("");
+}
+
 function drawAcrossHorizon(cv,series,opts){
   const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=opts.height;
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
   const g=cv.getContext("2d");g.scale(dpr,dpr);
-  const padL=46,padR=10,padT=10,padB=22,iw=W-padL-padR,ih=H-padT-padB;
-  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  const padL=58,padR=12,padT=26,padB=30,iw=W-padL-padR,ih=H-padT-padB;
+  const mono=css("--mono").split(",")[0];
+  g.font="10px "+mono;
   const P=runs[runA].pred;
-  if(!P){g.fillText("no chunk file for this run — nothing to read the plan from",padL,H/2);return}
+  if(!P){g.fillStyle=css("--muted");g.font="12px "+css("--disp").split(",")[0];
+    g.fillText("no chunk file for this run — nothing to read the plan from",padL,H/2);return}
   const kmax=Math.max(...series.map(s=>s.v.length))-1;
-  if(kmax<1){g.fillText("chunks too short to measure",padL,H/2);return}
+  if(kmax<1){g.fillStyle=css("--muted");g.fillText("chunks too short to measure",padL,H/2);return}
   const X=k=>padL+iw*k/Math.max(kmax,1);
   const Y=v=>padT+ih*(1-(v-opts.ymin)/Math.max(opts.ymax-opts.ymin,1e-9));
 
-  // Which part of the horizon was actually used. The plans store knows it
-  // per chunk; without it (a run over the plans budget) fall back to the
-  // run's own schedule numbers so the shading still appears.
   const S=planStore(), sch=runs[runA].schedule||{}, cfg=runs[runA].cfg;
   const med=a=>{const b=a.slice().sort((x,y)=>x-y);return b.length?b[Math.floor(b.length/2)]:0};
   const skipMed=S?med(S.skip):(sch.skip_p50!=null?Math.round(sch.skip_p50):0);
   const depthMed=S?med(S.depth):(sch.depth_p95!=null?Math.round(sch.depth_p95):-1);
+
+  // region bands, and their names ABOVE the plot so they never sit on the data
   let k=0;
   while(k<=kmax){
     const reg=regionOf(k,skipMed,depthMed,cfg);
     let k2=k; while(k2<=kmax&&regionOf(k2,skipMed,depthMed,cfg)===reg)k2++;
-    g.fillStyle=css(REGION_COLOR[reg]);g.globalAlpha=.10;
+    g.fillStyle=css(REGION_COLOR[reg]);g.globalAlpha=.16;
     g.fillRect(X(k),padT,Math.max(X(k2)-X(k),1),ih);g.globalAlpha=1;
-    if(X(k2)-X(k)>56){g.fillStyle=css(REGION_COLOR[reg]);g.fillText(REGION_LABEL[reg],X(k)+3,padT+10)}
+    const w=X(k2)-X(k);
+    if(w>10){
+      g.fillStyle=css(REGION_COLOR[reg]);
+      g.fillRect(X(k),padT-14,Math.max(w-1,1),3);
+      const lab=REGION_LABEL[reg];
+      if(w>g.measureText(lab).width+8)g.fillText(lab,X(k)+3,padT-5);
+    }
     k=k2;
   }
+
+  // horizontal gridlines with labelled ticks — the point of this rewrite
+  const ticks=niceTicks(opts.ymin,opts.ymax,4);
+  g.textAlign="right";
+  ticks.forEach(v=>{
+    const y=Y(v);
+    g.strokeStyle=css("--hairline");g.globalAlpha=v===0?.9:.45;g.lineWidth=1;
+    g.beginPath();g.moveTo(padL,y);g.lineTo(padL+iw,y);g.stroke();g.globalAlpha=1;
+    g.fillStyle=css("--muted");g.fillText(fmtTick(v,opts.unit),padL-6,y+3);
+  });
+  g.textAlign="left";
+  if(opts.unit){g.fillStyle=css("--muted");g.fillText(opts.unit,padL-6-g.measureText(opts.unit).width,padT-5)}
+
+  // Reference lines carry no in-plot text: the legend above names them, and a
+  // label inside the frame necessarily sits on top of the curve it explains.
   (opts.refs||[]).forEach(r=>{
     if(r.v<opts.ymin||r.v>opts.ymax)return;
-    g.strokeStyle=css(r.color);g.globalAlpha=.8;g.lineWidth=1;g.setLineDash([4,3]);
-    g.beginPath();g.moveTo(padL,Y(r.v));g.lineTo(padL+iw,Y(r.v));g.stroke();
+    const y=Y(r.v);
+    g.strokeStyle=css(r.color);g.globalAlpha=.9;g.lineWidth=1.2;g.setLineDash([5,4]);
+    g.beginPath();g.moveTo(padL,y);g.lineTo(padL+iw,y);g.stroke();
     g.setLineDash([]);g.globalAlpha=1;
-    g.fillStyle=css(r.color);g.fillText(r.label,padL+iw-g.measureText(r.label).width-4,Y(r.v)-3);
   });
-  // The coherent stretch of the plan, bracketed on the axis. Drawn on both
-  // charts so the acceleration rise and the cosine collapse line up visibly.
+
   if(opts.markUsable){
     const w=usableWindow(runs[runA]);
     if(w){
-      g.strokeStyle=css("--good");g.lineWidth=2;
-      g.beginPath();g.moveTo(X(w.from),padT+2);g.lineTo(X(w.to),padT+2);g.stroke();
-      [w.from,w.to].forEach(kk=>{g.beginPath();g.moveTo(X(kk),padT);g.lineTo(X(kk),padT+7);g.stroke()});
-      g.fillStyle=css("--good");
-      g.fillText("plan holds together here",X(w.from)+4,padT+16);
+      g.strokeStyle=css("--good");g.lineWidth=2.5;
+      g.beginPath();g.moveTo(X(w.from),padT+3);g.lineTo(X(w.to),padT+3);g.stroke();
+      [w.from,w.to].forEach(kk=>{g.beginPath();g.moveTo(X(kk),padT);g.lineTo(X(kk),padT+8);g.stroke()});
     }
   }
-  g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
+  g.strokeStyle=css("--hairline");g.globalAlpha=1;g.strokeRect(padL,padT,iw,ih);
+
   series.forEach(s=>{
-    g.strokeStyle=css(s.color);g.lineWidth=1.6;
+    g.strokeStyle=css(s.color);g.lineWidth=1.8;
     if(s.dash)g.setLineDash([3,3]);
     g.beginPath();let started=false;
     s.v.forEach((val,i)=>{if(val==null){started=false;return}
       const x=X(i),y=Y(val); started?g.lineTo(x,y):g.moveTo(x,y); started=true});
     g.stroke();g.setLineDash([]);
   });
+
+  // x axis
   g.fillStyle=css("--muted");
-  g.fillText(String(opts.ymax)+" "+opts.unit,2,padT+8);
-  g.fillText(String(opts.ymin),2,padT+ih);
-  g.fillText("horizon step k (0 = first step of the chunk)",padL+iw/2-84,H-5);
-  g.fillText(String(kmax),W-padR-14,H-5);
-  let lx=padL+4;
-  series.forEach(s=>{g.fillStyle=css(s.color);g.fillText(s.label,lx,padT+ih-4);lx+=g.measureText(s.label).width+12});
+  niceTicks(0,kmax,6).forEach(v=>{
+    if(v<0||v>kmax)return;
+    g.fillText(String(Math.round(v)),X(v)-4,padT+ih+13);
+  });
+  g.fillText("horizon step k  (0 = first step of the chunk)",padL,H-4);
   drawCrosshair(g,cv,padL,padT,iw,ih);
   cv._probe=(px,py)=>{
     if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
     const kq=Math.max(0,Math.min(kmax,Math.round((px-padL)/iw*kmax)));
     const lines=["horizon step <b>"+kq+"</b> — "+REGION_LABEL[regionOf(kq,skipMed,depthMed,cfg)]];
     series.forEach(s=>{const v=s.v[kq];
-      if(v!=null)lines.push(s.label+": <b>"+v.toFixed(s.dp)+"</b> "+(s.unit||opts.unit))});
+      // an explicit empty unit means "unitless", not "fall back to the axis"
+      if(v!=null)lines.push(s.label+": <b>"+v.toFixed(s.dp)+"</b> "
+        +(s.unit!==undefined?s.unit:opts.unit))});
     return {lines,snapX:X(kq)};
   };
 }
 
-// The stretch of the horizon the policy actually plans coherently: the
-// longest unbroken run of steps whose direction cosine holds at or above
+// The stretch of the horizon the policy actually plans coherently: the longest
+// unbroken run of steps whose direction cosine holds at or above
 // DIRCOS_USABLE. This is the window an execution horizon should sit inside —
 // executing past its end means driving the arm with the part of the plan the
 // model was no longer predicting a trajectory in.
@@ -1167,12 +1214,10 @@ function usableWindow(r){
   return bi<0?null:{from:bi,to:bi+bl-1,len:bl};
 }
 // Where this run's execution actually landed on the horizon — measured, not
-// configured. It starts at the prefetch cut (steps that expired in flight are
-// skipped) and ends at the deepest step reached before the next chunk took
-// over. With prefetch that is well short of the configured execution horizon,
-// so the configured value would overstate the span; it is only the fallback
-// for runs with no schedule numbers. Clamped to the chunk, which cannot be
-// executed past its last step.
+// configured. It starts at the prefetch cut and ends at the deepest step
+// reached before the next chunk took over; with prefetch that is well short of
+// the configured execution horizon, which is only the fallback. Clamped to the
+// chunk, which cannot be executed past its last step.
 function execSpan(r){
   const sch=r.schedule||{}, H=(r.pred||{}).H;
   const from=sch.skip_p50!=null?Math.round(sch.skip_p50):0;
@@ -1185,29 +1230,36 @@ function execSpan(r){
 function bestHorizon(r){
   const P=r.pred; if(!P||!P.dircos_k)return null;
   const w=usableWindow(r);
-  if(!w)return `<span class="warn">none</span> <span class="dim">— no run of steps holds ${DIRCOS_USABLE}; the plan is noisy end to end</span>`;
-  let s=`k=${w.from}–${w.to} <span class="dim">(${w.len} steps at or above ${DIRCOS_USABLE})</span>`;
+  if(!w)return '<span class="warn">none</span> <span class="dim">— no run of steps holds '
+    +DIRCOS_USABLE+'; the plan is noisy end to end</span>';
+  let out='k='+w.from+'–'+w.to+' <span class="dim">('+w.len+' steps at or above '+DIRCOS_USABLE+')</span>';
   const e=execSpan(r);
   if(e){
     const outside=Math.max(0,w.from-e.from)+Math.max(0,e.to-w.to);
-    s+=`<br><span class="dim">this run executed k=${e.from}–${e.to} — `
-      +(outside?`<b>${outside} of those ${e.to-e.from+1} steps sit outside it</b> ⚠`:"inside it")+"</span>";
+    out+='<br><span class="dim">this run executed k='+e.from+'–'+e.to+' — '
+      +(outside?'<b>'+outside+' of those '+(e.to-e.from+1)+' steps sit outside it</b> ⚠':'inside it')+'</span>';
   }
-  return s;
+  return out;
 }
 
 function drawPredCharts(){
   if(page!=="plans")return;
   const P=runs[runA].pred, cos=$("hzcos"), acc=$("hzacc");
+  const lgc=$("hzcosLg"), lga=$("hzaccLg");
+  if(lgc)lgc.innerHTML=legendHTML([{color:"--cmd",label:"direction cosine of the plan"},
+    {color:"--good",label:"demonstrations ("+DIRCOS_REF+")",dash:true},
+    {color:"--accent",label:"executed"},{color:"--ghost",label:"skipped (prefetch cut)"},
+    {color:"--tail",label:"discarded tail"}]);
+  if(lga)lga.innerHTML=legendHTML([{color:"--act",label:"movement per step (mrad)"},
+    {color:"--warn",label:"acceleration (mrad/tick²)"}]);
   if(cos)drawAcrossHorizon(cos,P?[{v:P.dircos_k,color:"--cmd",label:"direction cosine",dp:2,unit:""}]:[{v:[],color:"--cmd",label:"",dp:2}],
-    {ymin:-1,ymax:1,unit:"",height:200,markUsable:true,
-     refs:[{v:DIRCOS_REF,color:"--good",label:"demonstrations "+DIRCOS_REF},
-           {v:0,color:"--muted",label:"right-angle turn"}]});
+    {ymin:-1,ymax:1,unit:"cos",height:230,markUsable:true,
+     refs:[{v:DIRCOS_REF,color:"--good"}]});
   if(acc){
     const mx=P?Math.max(1,...[...(P.accel_k||[]),...(P.step_k||[])].filter(v=>v!=null)):1;
     drawAcrossHorizon(acc,P?[{v:P.step_k,color:"--act",label:"movement per step",dp:1,unit:"mrad"},
                              {v:P.accel_k,color:"--warn",label:"acceleration",dp:1,unit:"mrad/tick²"}]:[{v:[],color:"--act",label:"",dp:1}],
-      {ymin:0,ymax:Math.ceil(mx*1.1),unit:"mrad",height:180,markUsable:true});
+      {ymin:0,ymax:Math.ceil(mx*1.1),unit:"mrad",height:205,markUsable:true});
   }
 }
 
@@ -1217,8 +1269,8 @@ function drawAgg(){
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
   const g=cv.getContext("2d");g.scale(dpr,dpr);
-  const padL=46,padR=10,padT=10,padB=22,iw=W-padL-padR,ih=H-padT-padB;
-  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  const padL=58,padR=12,padT=18,padB=22,iw=W-padL-padR,ih=H-padT-padB;
+  g.fillStyle=css("--muted");g.font="10px "+css("--mono").split(",")[0];
   const P=planStore(), agg=P&&P.agg;
   if(!agg){g.fillText(P?"not enough chunk pairs to aggregate":"no chunk file for this run",padL,H/2);return}
   const cfg=runs[runA].cfg;
@@ -1247,6 +1299,13 @@ function drawAgg(){
     g.beginPath();g.moveTo(X(depthMed+1),padT);g.lineTo(X(depthMed+1),padT+ih);
     g.stroke();g.setLineDash([]);g.globalAlpha=1;
   }
+  // labelled gridlines, same as the horizon charts
+  niceTicks(0,ymax,4).forEach(v=>{
+    const y=Y(v);
+    g.strokeStyle=css("--hairline");g.globalAlpha=.45;g.lineWidth=1;
+    g.beginPath();g.moveTo(padL,y);g.lineTo(padL+iw,y);g.stroke();g.globalAlpha=1;
+    g.fillStyle=css("--muted");g.textAlign="right";g.fillText(fmtTick(v),padL-6,y+3);g.textAlign="left";
+  });
   g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
   g.fillStyle=css("--accent");g.globalAlpha=.16;g.beginPath();
   agg.k.forEach((kk,i)=>{const x=X(kk),y=Y(agg.p90[i]); i?g.lineTo(x,y):g.moveTo(x,y)});
@@ -1256,7 +1315,7 @@ function drawAgg(){
   agg.k.forEach((kk,i)=>{const x=X(kk),y=Y(agg.p50[i]); i?g.lineTo(x,y):g.moveTo(x,y)});
   g.stroke();
   g.fillStyle=css("--muted");
-  g.fillText(Math.round(ymax)+" mrad",2,padT+8);g.fillText("0",padL-10,padT+ih);
+  g.fillText("mrad",2,padT-4);
   g.fillText("steps past the chunk switch",padL+iw/2-62,H-5);
   g.fillText(String(kmax),W-padR-14,H-5);g.fillText("0",padL,H-5);
   drawCrosshair(g,cv,padL,padT,iw,ih);
@@ -1282,7 +1341,7 @@ function renderPlans(){
   ["executed","skipped","tail"].forEach(r=>{
     lg+='<i style="background:'+css(REGION_COLOR[r])+'"></i>'+REGION_LABEL[r];
   });
-  lg+='<i style="background:'+css("--cut")+'"></i>prefetch cut (solid) / superseded (dashed)';
+  lg+='<i style="background:'+css("--cut")+';outline:1px solid '+css("--hairline")+'"></i>markers: prefetch cut (solid) / superseded (dashed)';
   lg+='<i style="background:'+css("--cmd")+'"></i>actually commanded';
   $("planLegend").innerHTML=lg;
   $("planHint").textContent=planHintText();
