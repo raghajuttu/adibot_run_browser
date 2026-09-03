@@ -72,6 +72,13 @@ select{width:100%}
 label.chk{display:flex;gap:6px;align-items:center;font-family:var(--mono);font-size:11px;color:var(--muted);margin:4px 0;cursor:pointer}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
 .chip{font-family:var(--mono);font-size:11px;background:var(--surface);border:1px solid var(--hairline);border-radius:3px;padding:3px 9px}
+.verdict{border:1px solid var(--hairline);border-left:4px solid var(--accent);background:var(--surface);
+  border-radius:4px;padding:10px 14px;margin:0 0 12px}
+.verdict.caseA{border-left-color:var(--cmd)} .verdict.caseB{border-left-color:var(--warn)}
+.verdict.caseC{border-left-color:var(--b2)} .verdict.caseAB{border-left-color:var(--cmd)}
+.verdict.none{border-left-color:var(--good)}
+.verdict h3{margin:0 0 5px;font-size:14px;font-family:var(--disp)}
+.verdict p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
 .chip b{color:var(--accent);font-weight:600}
 .chip.b b{color:var(--b2)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
@@ -160,6 +167,12 @@ tr.jump:hover td{background:var(--accent-soft)}
       <div>
         <div class="sec" data-sec="tracking"><h2 class="sechead"><span class="caret">&#9662;</span>Tracking (mrad)</h2>
           <div class="secbody scrollbox" id="statsbox"></div></div>
+        <div class="sec" data-sec="jitter"><h2 class="sechead"><span class="caret">&#9662;</span>Jitter diagnosis</h2>
+          <div class="secbody">
+            <div id="verdictBox"></div>
+            <div id="nvbox"></div>
+            <div class="note">The three metrics from the deployment guide's jitter section, computed exactly as it defines them &mdash; L2 norm across the joint dimension, unweighted mean, every joint. <b>as executed</b> repeats metrics 2 and 3 across the steps this run actually joined, because under prefetch step 0 of a new chunk is never sent to the arm and the seam the literal formula measures did not happen.</div>
+          </div></div>
         <div class="sec" data-sec="facts"><h2 class="sechead"><span class="caret">&#9662;</span>Run facts</h2>
           <div class="secbody scrollbox" id="factsbox"></div></div>
         <div class="sec" data-sec="dist"><h2 class="sechead"><span class="caret">&#9662;</span>Step distribution (mrad)</h2>
@@ -804,6 +817,28 @@ function renderTables(){
     });
   });
   $("graspbox").innerHTML=gh;
+
+  // ---- the guide's jitter diagnosis, above the general facts -------------
+  const vd=runs[runA].verdict, nv=runs[runA].nvidia||{}, ms=runs[runA].measured||{};
+  $("verdictBox").innerHTML = vd
+    ? `<div class="verdict ${vd.case==="none"?"none":"case"+vd.case.replace("+","")}">`
+      +`<h3>${esc(vd.title)}</h3><p>${esc(vd.why)}</p></div>`
+    : `<div class="note">No measured-position columns, so there is nothing to diagnose against.</div>`;
+  let nh="<table>";
+  const nrow=(k,v)=>`<tr><td>${k}</td><td class="r">${dash(v)}</td></tr>`;
+  nh+=nrow("<b>Metric 1</b> &mdash; mean intra-chunk acceleration (mrad/tick&sup2;)",
+    nv.m1_accel_all!=null?`${nv.m1_accel_all} <span class="dim">all joints · ${nv.m1_accel_arm} arm only</span>`:null);
+  nh+=nrow("<b>Metric 2</b> &mdash; position jump at the chunk boundary (mrad)",
+    nv.m2_jump_doc!=null?`${nv.m2_jump_doc} <span class="dim">literal · ${dash(nv.m2_jump_exec)} as executed</span>`:null);
+  nh+=nrow("<b>Metric 3</b> &mdash; momentum shift at the boundary (cosine)",
+    nv.m3_cos_doc!=null?`${nv.m3_cos_doc} <span class="dim">literal · ${dash(nv.m3_cos_exec)} as executed</span>`:null);
+  nh+=nrow("<span class=\"dim\">measured on</span> execute_steps / skip",
+    nv.execute_steps!=null?`${nv.execute_steps} / ${dash(nv.skip_p50)} <span class="dim">over ${dash(nv.pairs)} chunk pairs</span>`:null);
+  nh+=nrow("the arm itself &mdash; direction continuity",
+    ms.dircos!=null?`${ms.dircos} <span class="dim">(demonstrations ${DIRCOS_REF}) · ${ms.reversal_frac!=null?(100*ms.reversal_frac).toFixed(0)+"% of steps reverse":""}</span>`:null);
+  nh+=nrow("the arm itself &mdash; acceleration / movement per tick (mrad)",
+    ms.accel!=null?`${ms.accel} / ${dash(ms.step)}`:null);
+  $("nvbox").innerHTML=nh+"</table>";
 
   const sc=runs[runA].schedule||{}, sm=runs[runA].smooth||{}, vi=runs[runA].violations||{}, cfg=runs[runA].cfg;
   let fh="<table>";
@@ -1479,6 +1514,11 @@ function renderMatrix(){
     ["dir cos in/splice",r=>{const s=r.smooth||{};
       return s.dircos_within==null?"—":`${s.dircos_within} / ${dash(s.dircos_splice)}`}],
     ["overlap mrad",r=>dash((r.overlap||{}).disagree_p50)],
+    ["case",r=>{const v=r.verdict;return v?(v.case==="none"?"\u2014 none":v.case):"\u2014"}],
+    ["arm cos",r=>dash((r.measured||{}).dircos)],
+    ["M1 accel",r=>dash((r.nvidia||{}).m1_accel_all)],
+    ["M2 jump",r=>dash((r.nvidia||{}).m2_jump_exec)],
+    ["M3 cos",r=>dash((r.nvidia||{}).m3_cos_exec)],
     ["plan cos",r=>dash((r.pred||{}).dircos_p50)],
     ["usable k",r=>{const w=usableWindow(r); if(!w)return "—";
       const e=execSpan(r), bad=e&&(e.from<w.from||e.to>w.to);
