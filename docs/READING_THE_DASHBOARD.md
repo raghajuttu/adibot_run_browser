@@ -415,10 +415,71 @@ them on a new model.
 
 ---
 
-## What the CSV cannot tell you
+## 11. Full-chunk metrics (runs with a `.chunks.npz`)
 
-True chunk-to-chunk *disagreement* (how much the new chunk differs from what
-the old one would have done) and verification that RTC's frozen region was
-honored both need the **unexecuted** part of each chunk, which the logger
-does not record. Measuring those would need a per-chunk sidecar with the
-full predicted array (~2.5 KB/chunk) — a logger change, not a dashboard one.
+Clients with `log_chunks` (post-v0.5) write a third file per run holding every
+action chunk **in full** — including the ~24 of 40 steps that are never
+executed. Three measurements become possible, shown in Run facts and on the
+chunk-profile plot; runs without the file show "—".
+
+- **Chunk overlap disagreement** — consecutive chunks describe the *same
+  instants* (each chunk is anchored in time through the CSV), so their
+  difference over the whole shared stretch is the true chunk-to-chunk
+  stability number. The executed-only *splice ratio* sees one step of this;
+  the overlap disagreement sees all ~24. Reported as p50/p95 over all chunk
+  pairs plus the worst pair — click it to jump there.
+- **RTC frozen-region mismatch** — with RTC on, the first `rtc_frozen_steps`
+  of each new chunk should *equal* the previous chunk at those instants.
+  This reports the actual mismatch in mrad; near zero means the server
+  honoured the freeze, anything larger means RTC is not doing what its
+  parameters claim.
+- **Discarded-tail error** — each chunk's unexecuted steps compared against
+  what was *actually commanded* at those instants by later chunks, drawn as
+  the dotted amber line on the chunk-profile plot (by `horizon_idx`, hover
+  for values). Flat and low = the deep tail was still a good prediction, and
+  executing deeper (a larger execution horizon) is safe; rising steeply =
+  the tail is stale guesswork and deeper execution would act on it.
+
+### The plans page
+
+The third page draws the predictions themselves, and is where the schedule
+becomes visible rather than numeric.
+
+**Every plan, per joint** — one panel per joint. Each faint line is one whole
+chunk, drawn on the time axis from the instant it was planned for, so
+consecutive chunks physically overlap where they describe the same moments.
+Where two lines separate, that gap *is* the disagreement. The solid red line
+is what the arm was actually commanded.
+
+Each plan is coloured by region:
+
+| colour | region | meaning |
+|---|---|---|
+| light blue | RTC frozen | the server was told to keep these identical to the previous chunk |
+| teal-green | RTC ramp | the blend region between frozen and free |
+| grey | skipped | expired in flight, discarded on arrival |
+| solid teal | executed | actually drove the arm |
+| grey dashed | discarded tail | predicted, then replaced by the next chunk |
+| **solid red line** | the prefetch cut | everything left of it was skipped |
+| red dashed line | superseded | where the next chunk took over |
+
+**One thing to look for immediately:** if the solid red prefetch cut sits to
+the *right* of the light-blue frozen band, RTC's frozen steps were all
+discarded before they could drive anything — the freeze is configured but
+never reaches the arm. That is `rtc_frozen_steps` being smaller than the skip,
+and it is invisible in every other view.
+
+Plans are drawn only when the visible window is short (8 s by default,
+`plans_window_s`) — a whole run of overlaid chunks is an unreadable smear.
+Zoom with the scroll wheel; the hint above the grid says which mode you are in.
+
+**Disagreement between consecutive plans** — the aggregate at the top of the
+page. For every chunk pair, how far apart the two plans are about the same
+instant, plotted against how many steps past the switch that instant is:
+median line with a p10–p90 band, over every pair in the run. The same region
+bands sit behind it, so you can see whether disagreement grows inside the
+executed region or only out in the discarded tail. Flat and low means each new
+plan simply continues the old one.
+
+The run matrix gains an **overlap mrad** column so configurations can be
+compared on true stability, not just the one-step splice.

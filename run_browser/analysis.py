@@ -108,7 +108,12 @@ def _pct(x, q) -> float | None:
 
 
 # ---------------------------------------------------------------- per-run work
-def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> dict:
+def process_run(
+    csv_path: Path,
+    cfg: Options,
+    run_meta: dict | None = None,
+    chunk_data: dict | None = None,
+) -> dict:
     """Everything the dashboard shows for one run, as one JSON-ready dict.
 
     run_meta is the parsed .meta.json sidecar (None for pre-v0.4 logs); it is
@@ -269,6 +274,8 @@ def process_run(csv_path: Path, cfg: Options, run_meta: dict | None = None) -> d
     run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
     run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
     run["violations"] = _violation_rates(df, run_meta, cfg)
+    run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg)
+    run["plans"] = _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg)
     return run
 
 
@@ -701,3 +708,215 @@ def _violation_rates(df, run_meta: dict | None, cfg: Options) -> dict:
             if len(s):
                 out[key] = round(float(s.values.astype(float).mean()), 4)
     return out
+
+
+# ------------------------------------------------- full-chunk overlap metrics
+def _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg: Options) -> dict | None:
+    """Metrics that need the UNEXECUTED part of each chunk (<run>.chunks.npz).
+
+    Alignment needs no extra bookkeeping: the CSV anchors each chunk in time.
+    From chunk c's first executed row (t_first, hi_first), its step i — executed
+    or not — targets t_first + (i - hi_first) * tick. Two consecutive chunks
+    therefore describe a shared stretch of instants, and their disagreement
+    over that whole overlap is the true splice number the executed-only
+    boundary step approximates.
+
+    Returns None when no chunk file was recorded (pre-chunk-logging runs).
+    """
+    col = cfg.column_names
+    if chunk_data is None or len(df) < 2 or tick_ms <= 0:
+        return None
+    names = [c[len(col["cmd_prefix"]):] for c in df.columns if c.startswith(col["cmd_prefix"])]
+    arm_idx = [k for k, n in enumerate(names) if cfg.finger_marker not in n]
+    chunks = chunk_data["chunks"]
+    if not arm_idx or chunks.shape[2] < len(names):
+        return None
+    cseq = chunk_data["seq"].astype(int)
+    by_seq = {int(sq): k for k, sq in enumerate(cseq)}
+
+    # Anchor each executed chunk: time of step 0 = t_first - hi_first * tick.
+    starts = np.where(new_chunk)[0]
+    anchor = {}
+    for si in starts:
+        anchor[int(seq[si])] = float(t[si]) - float(hi[si]) * tick_ms / 1000.0
+
+    tick_s = tick_ms / 1000.0
+    pair_med, pair_seq = [], []
+    frozen_mm = []
+    frozen_steps = None
+    if isinstance(run_meta, dict) and run_meta.get("rtc_enable"):
+        frozen_steps = run_meta.get("rtc_frozen_steps")
+
+    exec_seqs = sorted(anchor)
+    for a_sq, b_sq in zip(exec_seqs[:-1], exec_seqs[1:]):
+        ka, kb = by_seq.get(a_sq), by_seq.get(b_sq)
+        if ka is None or kb is None:
+            continue
+        ca, cb = chunks[ka], chunks[kb]
+        # offset in steps between the two chunks' anchors
+        off = (anchor[b_sq] - anchor[a_sq]) / tick_s
+        o = int(round(off))
+        if abs(off - o) > 0.35 or o <= 0:
+            continue  # anchors don't align to the tick grid (stall wobble)
+        n = min(ca.shape[0] - o, cb.shape[0])
+        if n < 3:
+            continue
+        d = np.abs(ca[o : o + n][:, arm_idx] - cb[:n][:, arm_idx]) * 1000.0
+        valid = np.isfinite(d).any(axis=1)
+        if not valid.any():
+            continue
+        with np.errstate(invalid="ignore"):
+            dmax = np.nanmax(d[valid], axis=1)
+        dmax = dmax[np.isfinite(dmax)]
+        if not len(dmax):
+            continue
+        pair_med.append(float(np.median(dmax)))
+        pair_seq.append(int(b_sq))
+        if frozen_steps:
+            m = min(int(frozen_steps), n)
+            fz = np.abs(ca[o : o + m][:, arm_idx] - cb[:m][:, arm_idx]) * 1000.0
+            fv = np.isfinite(fz).any(axis=1)
+            if fv.any():
+                with np.errstate(invalid="ignore"):
+                    v = np.nanmedian(np.nanmax(fz[fv], axis=1))
+                if np.isfinite(v):
+                    frozen_mm.append(float(v))
+
+    out: dict = {"pairs": len(pair_med)}
+    if pair_med:
+        arr = np.asarray(pair_med)
+        out["disagree_p50"] = round(float(np.median(arr)), 1)
+        out["disagree_p95"] = _pct(arr, 95)
+        worst = int(np.argmax(arr))
+        out["disagree_max"] = round(float(arr[worst]), 1)
+        out["disagree_max_seq"] = pair_seq[worst]
+    if frozen_mm:
+        out["rtc_frozen_mismatch_p50"] = round(float(np.median(frozen_mm)), 1)
+
+    # Discarded-tail quality: unexecuted steps vs what was ACTUALLY commanded
+    # at those instants (from the CSV), aggregated by horizon_idx.
+    cmd_all = df[[f"{col['cmd_prefix']}{n}" for n in names]].values.astype(float)
+    tail_err: dict[int, list] = {}
+    # deepest executed horizon_idx per chunk (rows are in order, so the last
+    # row of each chunk wins)
+    exec_depth: dict[int, int] = {}
+    for i in range(len(df)):
+        exec_depth[int(seq[i])] = int(hi[i])
+    for sq, kk in by_seq.items():
+        if sq not in anchor:
+            continue
+        depth = exec_depth.get(sq, -1)
+        ch = chunks[kk]
+        for step in range(depth + 1, ch.shape[0]):
+            ti = anchor[sq] + step * tick_s
+            # map through real time (not row index) so stalls don't misalign
+            j = np.searchsorted(t, ti)
+            if j >= len(t):
+                break
+            if j > 0 and abs(t[j - 1] - ti) < abs(t[j] - ti):
+                j -= 1
+            if abs(float(t[j]) - ti) > 0.6 * tick_s:
+                continue
+            pred = ch[step][arm_idx]
+            actual_cmd = cmd_all[j][arm_idx]
+            with np.errstate(invalid="ignore"):
+                e = np.nanmax(np.abs(pred - actual_cmd)) * 1000.0
+            if np.isfinite(e):
+                tail_err.setdefault(step, []).append(float(e))
+    if tail_err:
+        ks = sorted(tail_err)
+        out["tail"] = {"k": ks,
+                       "err": [round(float(np.median(tail_err[k])), 1) for k in ks]}
+        allv = [v for vs in tail_err.values() for v in vs]
+        out["tail_err_p50"] = round(float(np.median(allv)), 1)
+    return out
+
+
+def _chunk_anchors(t, hi, seq, new_chunk, tick_ms) -> dict:
+    """Time of each executed chunk's step 0: t_first - hi_first * tick.
+
+    Every step of a chunk — executed or not — is placed from this anchor, so
+    two chunks land on a shared time axis without extra bookkeeping.
+    """
+    out = {}
+    for si in np.where(new_chunk)[0]:
+        out[int(seq[si])] = float(t[si]) - float(hi[si]) * tick_ms / 1000.0
+    return out
+
+
+def _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg: Options) -> dict | None:
+    """Per-chunk predicted trajectories for the plans view, plus the aggregate
+    disagreement-vs-offset curve.
+
+    Ships each chunk as: anchor time, skip applied, deepest executed step, and
+    one array per joint. Regions (skipped head / frozen / ramp / executed /
+    discarded tail) are derived on the page from these plus the run config, so
+    changing a colour never means recomputing anything.
+    """
+    if chunk_data is None or tick_ms <= 0:
+        return None
+    chunks = chunk_data["chunks"]
+    n_ch, H, D = chunks.shape
+    if D < len(names) or n_ch == 0:
+        return None
+    if n_ch * H * len(names) > cfg.chunk_store_max_values:
+        return {"omitted": True, "n_chunks": int(n_ch)}
+
+    anchor = _chunk_anchors(t, hi, seq, new_chunk, tick_ms)
+    depth: dict[int, int] = {}
+    for i in range(len(t)):
+        depth[int(seq[i])] = int(hi[i])
+
+    cseq = chunk_data["seq"].astype(int)
+    skips = chunk_data["skip"].astype(int) if "skip" in chunk_data else np.zeros(n_ch, int)
+    keep = [k for k, sq in enumerate(cseq) if int(sq) in anchor]
+    if not keep:
+        return None
+
+    store: dict = {
+        "seq": [int(cseq[k]) for k in keep],
+        "t0": [round(anchor[int(cseq[k])], 3) for k in keep],
+        "skip": [int(skips[k]) for k in keep],
+        "depth": [int(depth.get(int(cseq[k]), -1)) for k in keep],
+        "H": int(H),
+        "tick_s": round(tick_ms / 1000.0, 5),
+        "j": {},
+    }
+    for ji, n in enumerate(names):
+        col_vals = []
+        for k in keep:
+            v = chunks[k][:, ji]
+            col_vals.append([None if not np.isfinite(x) else round(float(x), 4) for x in v])
+        store["j"][n] = col_vals
+
+    # Aggregate: |old plan - new plan| by steps since the switch, over every
+    # consecutive pair, max across arm joints (same pooling as the metric).
+    arm_idx = [i for i, n in enumerate(names) if cfg.finger_marker not in n]
+    by_seq = {int(sq): k for k, sq in enumerate(cseq)}
+    per_off: dict[int, list] = {}
+    ex = sorted(anchor)
+    tick_s = tick_ms / 1000.0
+    for a_sq, b_sq in zip(ex[:-1], ex[1:]):
+        ka, kb = by_seq.get(a_sq), by_seq.get(b_sq)
+        if ka is None or kb is None:
+            continue
+        off = (anchor[b_sq] - anchor[a_sq]) / tick_s
+        o = int(round(off))
+        if abs(off - o) > 0.35 or o <= 0:
+            continue
+        n_ov = min(H - o, H)
+        for k in range(n_ov):
+            d = np.abs(chunks[ka][o + k, arm_idx] - chunks[kb][k, arm_idx]) * 1000.0
+            if np.isfinite(d).any():
+                with np.errstate(invalid="ignore"):
+                    per_off.setdefault(k, []).append(float(np.nanmax(d)))
+    if per_off:
+        ks = sorted(per_off)
+        store["agg"] = {
+            "k": ks,
+            "p50": [round(float(np.median(per_off[k])), 1) for k in ks],
+            "p10": [round(float(np.percentile(per_off[k], 10)), 1) for k in ks],
+            "p90": [round(float(np.percentile(per_off[k], 90)), 1) for k in ks],
+            "n": [len(per_off[k]) for k in ks],
+        }
+    return store
