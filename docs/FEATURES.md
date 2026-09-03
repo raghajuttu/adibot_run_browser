@@ -73,6 +73,12 @@ nothing to install for the reader. Light and dark theme follow the system.
   a glance; the exact numbers stay in the table below it.
 - **Step distribution strip** — within-chunk vs at-splice `|Δcmd|` histograms,
   showing whether a splice ratio is a consistent offset or a few outliers.
+- **Direction continuity (cosine)** — within-chunk and at-splice, in Run facts
+  and as a matrix column, with the demonstrations' value shown as the target
+  and a warning marker below `dircos_warn_below`. Separates "the model emits a
+  zigzag" (within-chunk, unfixable by scheduling) from "the seam is rough"
+  (at-splice). Uses the deployment guide's momentum-shift definition, which
+  skips the crossing step itself.
 - **Run matrix page** — one row per run: sidecar config beside measured
   behaviour (cycle, skip, depth p95, splice ratio, stalls, effective Hz,
   grasp success, latency, limit-guard rate) with pass/fail verdict chips,

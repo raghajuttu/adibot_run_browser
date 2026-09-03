@@ -272,6 +272,30 @@ How to read it:
 Hover any bin to see the exact size range and how many ticks of each kind fell
 in it.
 
+**Direction continuity (cosine)** — the sharpest smoothness signal on the page,
+and the one to watch first. It measures whether consecutive command steps point
+the same way: **+1** = the motion carries straight on, **0** = a right-angle
+turn, **negative** = the command reverses.
+
+Two numbers, answering different questions:
+
+- **within chunk** — both steps inside one chunk, no seam involved. This is the
+  *model's* smoothness. Human demonstrations sit near **+0.97** (shown beside
+  the value as the target); a policy far below that is emitting a zigzag rather
+  than a trajectory, and **no scheduling strategy can fix it** — it is the
+  deployment guide's "Case A: jitter inside each chunk", whose remedy is more
+  data, longer training, or a better action representation.
+- **at splice** — the old chunk's last step versus the new chunk's first,
+  skipping the crossing step itself (the guide calls this *momentum shift*).
+  Low only here means a seam problem, which prefetch scheduling or chunk
+  blending can address.
+
+Read them together. If the within-chunk number is poor while the splice number
+is fine, the seam is not your problem however bad the splice ratio looks — the
+model output is noisy everywhere and the mechanics are filtering it. Compare
+the commanded step against the arm's actual step to see how much of the
+command noise reaches the joints at all.
+
 **Safety** — the fraction of ticks where the limit guard held a side instead
 of publishing. A high rate invalidates the run's smoothness numbers: held
 ticks repeat the old command, which fakes smoothness.
