@@ -276,6 +276,7 @@ def process_run(
     run["violations"] = _violation_rates(df, run_meta, cfg)
     run["overlap"] = _overlap(chunk_data, df, t, hi, seq, new_chunk, tick_ms, run_meta, cfg)
     run["plans"] = _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg)
+    run["pred"] = _prediction(chunk_data, names, cfg)
     return run
 
 
@@ -920,3 +921,86 @@ def _plan_store(chunk_data, names, t, hi, seq, new_chunk, tick_ms, cfg: Options)
             "n": [len(per_off[k]) for k in ks],
         }
     return store
+
+
+# ------------------------------------------------ what the model itself emitted
+def _nanmax_last(v: np.ndarray) -> np.ndarray:
+    """Max over the last axis; NaN for an all-NaN row, and no warning for it.
+
+    Chunks shorter than the horizon are NaN-padded, so plain np.nanmax would
+    spend the run warning about all-NaN slices.
+    """
+    ok = np.isfinite(v).any(axis=-1)
+    out = np.full(v.shape[:-1], np.nan)
+    if ok.any():
+        out[ok] = np.nanmax(v[ok], axis=-1)
+    return out
+
+
+def _prediction(chunk_data, names, cfg: Options) -> dict | None:
+    """The quality of the model's raw output, before the client touches it.
+
+    Every other smoothness number here is measured on the executed command —
+    which is a stitched-together selection of steps from many chunks, shaped
+    by the execution horizon, the prefetch skip and where the boundaries
+    happened to fall. This one reads the 40-step chunks straight out of
+    <run>.chunks.npz, one chunk at a time, so none of that can influence it.
+    It is the difference between "what the robot was told" and "what the
+    policy actually thinks the trajectory is".
+
+    That distinction is the deployment guide's Case A test. If these numbers
+    are bad, the problem is the policy or the training data, and no amount of
+    scheduling, blending or chunk stitching will rescue the run.
+
+    Two quantities per the guide, both inside a single chunk:
+      dircos - cosine between consecutive step vectors. Human demonstrations
+               sit near +0.97; 0 is a right-angle turn every tick; negative
+               means the plan doubles back on itself.
+      accel  - |x[k+1] - 2 x[k] + x[k-1]|, the intra-chunk acceleration, in
+               mrad per tick squared.
+
+    Both are also returned per horizon step, because a model that is smooth
+    at k=0 and ragged at k=35 is telling you how far ahead it can be trusted
+    — which is exactly the number you need to choose an execution horizon.
+
+    Returns None when the run has no chunk file (nothing to measure).
+    """
+    if chunk_data is None:
+        return None
+    chunks = chunk_data.get("chunks")
+    if chunks is None or chunks.ndim != 3 or chunks.shape[0] == 0 or chunks.shape[1] < 3:
+        return None
+    arm = [i for i, n in enumerate(names) if cfg.finger_marker not in n]
+    if not arm or chunks.shape[2] < len(names):
+        return None
+
+    x = chunks[:, :, arm].astype(float)              # (n_chunks, H, arm joints)
+    with np.errstate(invalid="ignore"):
+        d1 = np.diff(x, axis=1)                      # step vectors, (n, H-1, A)
+        a, b = d1[:, :-1, :], d1[:, 1:, :]           # consecutive pairs
+        den = np.linalg.norm(a, axis=2) * np.linalg.norm(b, axis=2)
+        cos = np.where(den > 1e-12, (a * b).sum(axis=2) / np.maximum(den, 1e-12), np.nan)
+        acc = _nanmax_last(np.abs(b - a)) * 1000.0   # mrad/tick^2, (n, H-2)
+        step = _nanmax_last(np.abs(d1)) * 1000.0     # mrad/tick,   (n, H-1)
+
+    def med(v, dp=1):
+        v = v[np.isfinite(v)]
+        return round(float(np.median(v)), dp) if len(v) else None
+
+    out: dict = {"n_chunks": int(chunks.shape[0]), "H": int(chunks.shape[1])}
+    out["dircos_p50"] = med(cos, 3)
+    out["accel_p50"] = med(acc)
+    out["accel_p95"] = _pct(acc[np.isfinite(acc)], 95)
+    out["step_p50"] = med(step)
+    # Fraction of consecutive-step pairs that actually reverse direction. A
+    # median cosine hides this: a plan can average near zero either by turning
+    # a steady right angle or by alternating forwards and backwards.
+    fin = cos[np.isfinite(cos)]
+    if len(fin):
+        out["reversal_frac"] = round(float((fin < 0).mean()), 3)
+    # Per horizon step, so the depth-dependence is visible rather than pooled.
+    out["k"] = list(range(cos.shape[1]))
+    out["dircos_k"] = [med(cos[:, k], 3) for k in range(cos.shape[1])]
+    out["accel_k"] = [med(acc[:, k]) for k in range(acc.shape[1])]
+    out["step_k"] = [med(step[:, k]) for k in range(step.shape[1])]
+    return out
