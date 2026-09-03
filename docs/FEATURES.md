@@ -88,19 +88,33 @@ nothing to install for the reader. Light and dark theme follow the system.
 
 - `<run>.chunks.npz` beside a CSV is picked up automatically; from it the run
   gains **chunk overlap disagreement** (true stability over the whole shared
-  stretch of consecutive chunks, p50/p95/worst with a jump link), **RTC
-  frozen-region mismatch** (did the server honour the freeze), and the
-  **discarded-tail error** curve on the chunk-profile plot (was the
+  stretch of consecutive chunks, p50/p95/worst with a jump link), the
+  **frozen-region check** (how much the steps RTC asked to freeze actually
+  changed — the empirical evidence that a stock server drops the request),
+  and the **discarded-tail error** curve on the chunk-profile plot (was the
   never-executed tail any good — the direct evidence for a deeper execution
   horizon). The matrix gains an *overlap mrad* column. Runs without the file
   degrade to "—" as always.
 
-- **Plans page** (third page) — per-joint panels drawing every chunk's whole
-  prediction on the time axis, coloured by region (RTC frozen / ramp / skipped
-  / executed / discarded tail) with the prefetch cut and the takeover marked,
-  plus an aggregate disagreement-vs-steps-past-the-switch curve with a p10–p90
-  band. Plans draw when zoomed under `plans_window_s`; hover names the chunk,
-  step and region. Needs a `.chunks.npz`; runs without one say so.
+- **Model-plan metrics** — the same smoothness questions asked of the
+  policy's raw output rather than the executed stream, so nothing depends on
+  the execution horizon, the prefetch skip or where the boundaries fell: the
+  plan's own **direction continuity**, the **fraction of steps that reverse**,
+  its **intra-chunk acceleration** (the deployment guide's metric), and the
+  **usable horizon window** — the longest run of steps whose continuity holds
+  at or above `dircos_usable_min`, compared against where the run actually
+  executed. This is the clean test that separates "the policy is noisy" from
+  "our scheduling is stitching it badly". Matrix columns *plan cos* and
+  *usable k*.
+
+- **Plans page** (third page) — two charts of prediction quality across the
+  horizon (direction continuity, and movement/acceleration per step) with the
+  coherent stretch bracketed, plus per-joint panels drawing every chunk's
+  whole prediction on the time axis, coloured by region (skipped / executed /
+  discarded tail) with the prefetch cut and the takeover marked, and an
+  aggregate disagreement-vs-steps-past-the-switch curve with a p10–p90 band.
+  Plans draw when zoomed under `plans_window_s`; hover names the chunk, step
+  and region. Needs a `.chunks.npz`; runs without one say so.
 
 ## Prefetch / RTC awareness (client v0.4+)
 
