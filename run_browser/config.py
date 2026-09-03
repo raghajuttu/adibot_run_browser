@@ -113,6 +113,13 @@ class Options:
     in the page, which the plans view needs. A run over budget ships its
     metrics but no plans, flagged on the page. 150 chunks x 40 x 16 = 96k."""
 
+    plan_min_px_per_chunk: float = 10.0
+    """A plan panel draws every chunk only when each visible chunk gets at
+    least this many pixels of width. Legibility depends on pixels per chunk,
+    not on seconds: the same run is an unreadable smear in a 250 px grid panel
+    and perfectly clear in the enlarged view. Below this the panel draws the
+    commanded trace and says how to see the rest."""
+
     plans_window_s: float = 8.0
     """The plans view draws full predictions only when the visible window is
     this short — a whole run's worth of overlaid chunks is an unreadable
