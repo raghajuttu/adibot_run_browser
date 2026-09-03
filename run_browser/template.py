@@ -801,6 +801,8 @@ function renderTables(){
   fh+=row("model plan: acceleration p50/p95 (mrad/tick²)",pr.accel_p50!=null
     ?`${pr.accel_p50} / ${dash(pr.accel_p95)} <span class="dim">on ${dash(pr.step_p50)} mrad steps</span>`:null);
   fh+=row("model plan: last usable horizon step",bestHorizon(runs[runA]));
+  if(runs[runA].chunk_reject)
+    fh+=row("chunk store",`<span class="warn">rejected</span> <span class="dim">${esc(runs[runA].chunk_reject)}</span>`);
   fh+=row("velocity spike at splice (×median)",sm.vel_spike_ratio_p50);
   fh+=row("limit-guard held left / right",(vi.left!=null||vi.right!=null)?`${(100*(vi.left||0)).toFixed(1)}% / ${(100*(vi.right||0)).toFixed(1)}%`:null);
   fh+="</table>";
@@ -1273,6 +1275,7 @@ function renderPlans(){
   const P=runs[runA].plans;
   let chips=metaChip(runA,"");
   if(P&&P.omitted)chips+='<span class="chip">plans omitted — '+P.n_chunks+' chunks, over the size budget</span>';
+  else if(runs[runA].chunk_reject)chips+='<span class="chip warn">chunk store rejected — '+esc(runs[runA].chunk_reject)+'</span>';
   else if(!P)chips+='<span class="chip">no .chunks.npz — this run predates chunk logging</span>';
   $("planChips").innerHTML=chips;
   let lg="";
