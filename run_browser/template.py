@@ -27,6 +27,7 @@ def render(data: dict, cfg: Options) -> str:
     html = html.replace("__DIRCOS_WARN__", str(cfg.dircos_warn_below))
     html = html.replace("__DIRCOS_USABLE__", str(cfg.dircos_usable_min))
     html = html.replace("__PLANS_WINDOW__", str(cfg.plans_window_s))
+    html = html.replace("__PLAN_MIN_PX__", str(cfg.plan_min_px_per_chunk))
     # "</" inside a string value (a note, a task description) would terminate
     # the <script> block early; escape it inside the JSON payload.
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
@@ -41,10 +42,10 @@ TEMPLATE = r"""<meta charset="utf-8">
 :root{--ground:#FBFCFD;--surface:#F2F5F7;--ink:#1C2733;--muted:#5A6B7A;--hairline:#DCE3E8;
 --accent:#0E7C86;--accent-soft:#E3F1F2;--warn:#A8600F;--warn-soft:#F7EBDB;--good:#3D7A46;
 --cmd:#d62728;--act:#1f77b4;--b2:#8a5fbf;
---cut:#1B2733;--ghost:#8A99A6;--tail:#7B5EA7;
+--cut:#33424F;--ghost:#63768A;--tail:#7B5EA7;
 --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;--disp:"Archivo","Helvetica Neue",Arial,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#F2F7FA;--ghost:#5A6B7A;--tail:#b48be0}}
-:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#F2F7FA;--ghost:#5A6B7A;--tail:#b48be0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#C8D6E0;--ghost:#7E8FA0;--tail:#c9a6f0}}
+:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#C8D6E0;--ghost:#7E8FA0;--tail:#c9a6f0}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);font-size:14px}
 .layout{display:flex;min-height:100vh}
@@ -228,11 +229,20 @@ tr.jump:hover td{background:var(--accent-soft)}
 const DATA=__DATA__;
 const HI_ERR=__HI_ERR__, HI_NM=__HI_NM__;
 const V_SPLICE=__V_SPLICE__, V_DEPTH=__V_DEPTH__, PLANS_WINDOW=__PLANS_WINDOW__;
+const PLAN_MIN_PX=__PLAN_MIN_PX__;
 const DIRCOS_REF=__DIRCOS_REF__, DIRCOS_WARN=__DIRCOS_WARN__, DIRCOS_USABLE=__DIRCOS_USABLE__;
 const runs=DATA.runs, names=Object.keys(runs);
 let runA=names[0], runB="", view="track", side="all", page="signals";
-let vp=null;               // shared viewport {t0,t1}; null = full range
+// Two viewports, on purpose. `vp` belongs to the grid and is only ever set
+// programmatically (jumpTo, from a table row) - dragging one small panel used
+// to pan all sixteen, which is not what anyone means by panning a chart.
+// `mvp` belongs to the enlarged view and is the only one pointer input writes.
+// Closing the enlarged view discards it, so the grid never silently inherits
+// someone else's zoom.
+let vp=null;               // grid viewport {t0,t1}; null = full range
+let mvp=null;              // enlarged-view viewport; null = full range
 let modalJoint=null;       // joint shown in the enlarged modal, or null
+let modalKind=null;        // "signals" | "plans" - which drawer the modal uses
 const panelReg=[];         // [{cv, joint, big}] canvases to redraw on viewport change
 const errCache=new Map();  // run|joint -> Float64Array err (mrad) computed from raw
 const dash=v=>(v==null||v==="")?"—":v;
@@ -284,8 +294,9 @@ function runRange(r){
   for(const j in tr){const tt=tr[j].cmd[0]; if(tt.length)t1=Math.max(t1,tt[tt.length-1])}
   return[0,t1||1];
 }
-function viewRange(){
-  if(vp)return[vp.t0,vp.t1];
+function viewRange(big){
+  const v=big?mvp:vp;
+  if(v)return[v.t0,v.t1];
   const[a0,a1]=runRange(runA);
   if(!runB)return[a0,a1];
   const[b0,b1]=runRange(runB);
@@ -520,7 +531,7 @@ function drawCrosshair(g,cv,padL,padT,iw,ih){
 }
 
 function redrawAll(){
-  panelReg.forEach(p=>p.plans?drawPlanPanel(p.cv,p.joint):drawPanel(p.cv,p.joint,p.big));
+  panelReg.forEach(p=>p.plans?drawPlanPanel(p.cv,p.joint,p.big):drawPanel(p.cv,p.joint,p.big));
   if(page==="plans"){drawPredCharts(); drawAgg(); const h=$("planHint"); if(h)h.textContent=planHintText();}
 }
 let rafPending=false;
@@ -530,38 +541,41 @@ function scheduleRedraw(){
 }
 
 // ------------------------------------------------------------ interaction
-function clampVp(){
-  if(!vp)return;
+function clampVp(big){
+  const v=big?mvp:vp;
+  if(!v)return;
   const[r0,r1]=(()=>{const a=runRange(runA); if(!runB)return a;
     const b=runRange(runB); return[Math.min(a[0],b[0]),Math.max(a[1],b[1])]})();
-  const span=Math.max(vp.t1-vp.t0,0.02);
-  vp.t0=Math.max(r0,Math.min(vp.t0,r1-span));
-  vp.t1=Math.min(r1,Math.max(vp.t1,vp.t0+0.02));
-  if(vp.t0<=r0&&vp.t1>=r1)vp=null;   // fully zoomed out again
+  const span=Math.max(v.t1-v.t0,0.02);
+  v.t0=Math.max(r0,Math.min(v.t0,r1-span));
+  v.t1=Math.min(r1,Math.max(v.t1,v.t0+0.02));
+  if(v.t0<=r0&&v.t1>=r1){if(big)mvp=null;else vp=null}   // fully zoomed out again
 }
+// Attached ONLY to the enlarged canvas. Grid panels open the enlarged view on
+// click instead; a 250 px panel is too small to aim a zoom at anyway.
 function attachZoom(cv){
   cv.addEventListener("wheel",e=>{
     e.preventDefault();
     const rect=cv.getBoundingClientRect();
     const frac=Math.min(1,Math.max(0,(e.clientX-rect.left-46)/(rect.width-52)));
-    const[t0,t1]=viewRange();
+    const[t0,t1]=viewRange(true);
     const cursorT=t0+frac*(t1-t0);
     const f=Math.pow(1.25,e.deltaY>0?1:-1);       // >0 = zoom out
-    vp={t0:cursorT-(cursorT-t0)*f, t1:cursorT+(t1-cursorT)*f};
-    clampVp(); scheduleRedraw();
+    mvp={t0:cursorT-(cursorT-t0)*f, t1:cursorT+(t1-cursorT)*f};
+    clampVp(true); scheduleRedraw();
   },{passive:false});
   let dragX=null,dragVp=null;
-  cv.addEventListener("pointerdown",e=>{dragX=e.clientX;const[a,b]=viewRange();dragVp=[a,b];cv.setPointerCapture(e.pointerId)});
+  cv.addEventListener("pointerdown",e=>{dragX=e.clientX;const[a,b]=viewRange(true);dragVp=[a,b];cv.setPointerCapture(e.pointerId)});
   cv.addEventListener("pointermove",e=>{
     if(dragX==null)return;
     const rect=cv.getBoundingClientRect();
     const dt=(e.clientX-dragX)/(rect.width-52)*(dragVp[1]-dragVp[0]);
-    vp={t0:dragVp[0]-dt,t1:dragVp[1]-dt};
-    clampVp(); scheduleRedraw();
+    mvp={t0:dragVp[0]-dt,t1:dragVp[1]-dt};
+    clampVp(true); scheduleRedraw();
   });
   const end=e=>{dragX=null;dragVp=null};
   cv.addEventListener("pointerup",end); cv.addEventListener("pointercancel",end);
-  cv.addEventListener("dblclick",()=>{vp=null;scheduleRedraw()});
+  cv.addEventListener("dblclick",()=>{mvp=null;scheduleRedraw()});
 }
 function jumpTo(t,halfSpan){
   page="signals";
@@ -573,17 +587,27 @@ function seqTime(seq){
   const i=(runs[runA].bound_seq||[]).indexOf(seq);
   return i>=0?runs[runA].bounds[i]:null;
 }
+function drawWhenSized(cv,fn,tries){
+  if(cv.clientWidth>0){fn();return}
+  if((tries||0)>20)return;          // genuinely hidden; nothing to draw onto
+  requestAnimationFrame(()=>drawWhenSized(cv,fn,(tries||0)+1));
+}
 function closeModal(){
   $("modal").classList.remove("on");
-  modalJoint=null;
+  modalJoint=null; modalKind=null; mvp=null;
   for(let i=panelReg.length-1;i>=0;i--)if(panelReg[i].big)panelReg.splice(i,1);
 }
-function openModal(j){
-  modalJoint=j;
+// kind: "signals" (command vs actual) or "plans" (every predicted chunk).
+function openModal(j,kind){
+  modalJoint=j; modalKind=kind||"signals"; mvp=null;
   $("modal").classList.add("on");
-  $("mttl").textContent=short(j)+" — "+(VIEW_TITLES[view]||view);
-  panelReg.push({cv:$("mcanvas"),joint:j,big:true});
-  requestAnimationFrame(()=>drawPanel($("mcanvas"),j,true));
+  $("mttl").textContent=short(j)+" — "+(modalKind==="plans"
+    ? "every plan" : (VIEW_TITLES[view]||view))
+    +"   ·   scroll to zoom, drag to pan, double-click to reset";
+  const cv=$("mcanvas");
+  if(!cv._zoomed){attachZoom(cv);cv._zoomed=true}
+  panelReg.push({cv,joint:j,big:true,plans:modalKind==="plans"});
+  drawWhenSized(cv,()=>modalKind==="plans"?drawPlanPanel(cv,j,true):drawPanel(cv,j,true));
 }
 
 // ---------------------------------------------------------------- sidebar
@@ -703,15 +727,20 @@ function render(){
   joints().forEach(j=>{
     const p=document.createElement("div"); p.className="panel";
     const ttl=document.createElement("div"); ttl.className="ttl"; ttl.textContent=short(j);
-    ttl.title="enlarge"; ttl.onclick=()=>openModal(j);
+    ttl.title="enlarge"; ttl.onclick=()=>openModal(j,"signals");
     p.appendChild(ttl);
     const cv=document.createElement("canvas"); p.appendChild(cv); grid.appendChild(p);
-    attachZoom(cv);
+    cv.style.cursor="zoom-in"; cv.title="click to enlarge, then scroll to zoom";
+    cv.onclick=()=>openModal(j,"signals");
     panelReg.push({cv,joint:j,big:false});
     requestAnimationFrame(()=>drawPanel(cv,j,false));
   });
-  if(modalJoint!=null){panelReg.push({cv:$("mcanvas"),joint:modalJoint,big:true});
-    requestAnimationFrame(()=>drawPanel($("mcanvas"),modalJoint,true))}
+  if(modalJoint!=null){
+    const mc=$("mcanvas");
+    panelReg.push({cv:mc,joint:modalJoint,big:true,plans:modalKind==="plans"});
+    drawWhenSized(mc,()=>modalKind==="plans"
+      ? drawPlanPanel(mc,modalJoint,true)
+      : drawPanel(mc,modalJoint,true))}
   renderTables();
   requestAnimationFrame(()=>{drawProfile();drawHist()});
 }
@@ -961,24 +990,24 @@ const REGION_LABEL={skipped:"skipped (prefetch cut)",
                     executed:"executed",tail:"discarded tail"};
 function planStore(){const P=runs[runA].plans; return (P&&!P.omitted)?P:null}
 function planHintText(){
-  const[a,b]=viewRange();
-  return (b-a)>PLANS_WINDOW
-    ? "Showing "+Math.round(b-a)+"s — zoom in below "+PLANS_WINDOW+"s (scroll on a plot) to draw every chunk's full plan."
-    : "Each faint line is one chunk's whole plan, coloured by region.";
+  return "Each line is one chunk's whole plan, coloured by region. Click a panel "
+    +"to enlarge it, then scroll to zoom and drag to pan inside it — the grid "
+    +"itself no longer moves. A panel too narrow to separate its plans says so.";
 }
 
-function drawPlanPanel(cv,j){
-  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=170;
+function drawPlanPanel(cv,j,big){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=big?420:190;
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
   const g=cv.getContext("2d");g.scale(dpr,dpr);
-  const padL=46,padR=6,padT=6,padB=16,iw=W-padL-padR,ih=H-padT-padB;
-  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  const padL=52,padR=8,padT=8,padB=18,iw=W-padL-padR,ih=H-padT-padB;
+  const mono=css("--mono").split(",")[0];
+  g.fillStyle=css("--muted");g.font=(big?11:10)+"px "+mono;
   const P=planStore();
   if(!P){g.fillText("no chunk file for this run",padL,H/2);return}
   const arrs=P.j[j];
   if(!arrs){g.fillText("joint not in the chunk store",padL,H/2);return}
-  const[t0,t1]=viewRange();
+  const[t0,t1]=viewRange(big);
   const cfg=runs[runA].cfg;
   let ymin=Infinity,ymax=-Infinity;const vis=[];
   for(let c=0;c<P.seq.length;c++){
@@ -991,9 +1020,37 @@ function drawPlanPanel(cv,j){
   if(ymax-ymin<1e-9){ymax+=.01;ymin-=.01}
   const pd=(ymax-ymin)*.08;ymin-=pd;ymax+=pd;
   const X=t=>padL+iw*(t-t0)/(t1-t0), Y=v=>padT+ih*(1-(v-ymin)/(ymax-ymin));
+
+  // Whether a plan is legible depends on PIXELS per chunk, not on seconds.
+  // The old rule hid every plan whenever the window exceeded a fixed number of
+  // seconds, which meant a panel at full range drew nothing but the red
+  // commanded line and looked broken. Now the same run is drawn in the small
+  // panel or not according to how much room each chunk actually gets, and the
+  // enlarged view - being four times wider - shows plans the grid cannot.
+  const spacing=iw/Math.max(vis.length,1);
+  const drawPlans=spacing>=PLAN_MIN_PX;
+
+  // gridlines, so a value can be read off this panel like any other
+  g.textAlign="right";
+  niceTicks(ymin,ymax,big?5:3).forEach(v=>{
+    const y=Y(v);
+    g.strokeStyle=css("--hairline");g.globalAlpha=.4;g.lineWidth=1;
+    g.beginPath();g.moveTo(padL,y);g.lineTo(padL+iw,y);g.stroke();g.globalAlpha=1;
+    g.fillStyle=css("--muted");g.fillText(v.toFixed(2),padL-6,y+3);
+  });
+  g.textAlign="left";
+
   g.save();g.beginPath();g.rect(padL,padT,iw,ih);g.clip();
-  const wide=(t1-t0)>PLANS_WINDOW;
-  if(!wide){
+  if(drawPlans){
+    // Alpha falls as more plans overlap so a dense window stays readable, but
+    // never below the floor that made these invisible in the first place.
+    const al=Math.max(.55,Math.min(.95,18/Math.max(vis.length,1)));
+    // Weight follows what each region MEANS, because chunks overlap: a later
+    // chunk's skipped head is drawn over the previous chunk's executed steps,
+    // so if skipped were the boldest it would bury the one line that actually
+    // drove the arm. Executed loudest, then the discarded tail (where the
+    // interesting divergence is), then the head that never had a chance to run.
+    const WEIGHT={executed:{a:1.0,w:2.4},tail:{a:.8,w:1.7},skipped:{a:.45,w:1.2}};
     vis.forEach(c=>{
       const skip=P.skip[c],depth=P.depth[c],y=arrs[c],base=P.t0[c];
       let k=0;
@@ -1001,10 +1058,11 @@ function drawPlanPanel(cv,j){
         const reg=regionOf(k,skip,depth,cfg);
         let k2=k;
         while(k2<P.H-1&&regionOf(k2,skip,depth,cfg)===reg)k2++;
+        const wt=WEIGHT[reg]||WEIGHT.skipped;
         g.strokeStyle=css(REGION_COLOR[reg]);
-        g.globalAlpha=(reg==="executed")?.95:.5;
-        g.lineWidth=(reg==="executed")?1.4:1;
-        g.setLineDash(reg==="tail"?[3,3]:[]);
+        g.globalAlpha=Math.min(1,al*wt.a+(reg==="executed"?.15:0));
+        g.lineWidth=wt.w;
+        g.setLineDash(reg==="tail"?[4,3]:[]);
         g.beginPath();let st=false;
         for(let i=k;i<=k2&&i<P.H;i++){
           const v=y[i]; if(v==null){st=false;continue}
@@ -1016,33 +1074,54 @@ function drawPlanPanel(cv,j){
       }
       // the prefetch cut: everything left of here expired while the request
       // was in flight and was discarded on arrival.
+      // Drawn as a tick on the bottom axis, not a full-height rule. One rule
+      // per chunk is a picket fence: measured on a 24-chunk window they used
+      // more pixels than the executed plan itself and became the loudest thing
+      // on the panel, which is the opposite of what an annotation should be.
       if(skip>0){
         const xs=X(base+skip*P.tick_s);
-        g.strokeStyle=css("--cut");g.globalAlpha=.9;g.lineWidth=1.2;
-        g.beginPath();g.moveTo(xs,padT);g.lineTo(xs,padT+ih);g.stroke();
+        g.strokeStyle=css("--cut");g.globalAlpha=.8;g.lineWidth=1.4;
+        g.beginPath();g.moveTo(xs,padT+ih);g.lineTo(xs,padT+ih-9);g.stroke();
       }
       // where the next chunk superseded this one
       if(depth>=0&&depth<P.H-1){
         const xc=X(base+(depth+1)*P.tick_s);
-        g.strokeStyle=css("--cut");g.globalAlpha=.6;g.lineWidth=1;
-        g.setLineDash([2,2]);g.beginPath();g.moveTo(xc,padT);g.lineTo(xc,padT+ih);
+        g.strokeStyle=css("--cut");g.globalAlpha=.55;g.lineWidth=1.2;
+        g.setLineDash([2,2]);g.beginPath();g.moveTo(xc,padT);g.lineTo(xc,padT+9);
         g.stroke();g.setLineDash([]);
       }
       g.globalAlpha=1;
     });
   }
+  // The commanded trace goes on top as the reference, but at a weight that
+  // reads as one line among many rather than a wall of red over the plans.
   const tr=runs[runA].traces[j];
   if(tr&&tr.cmd){
     const tt=tr.cmd[0],yy=tr.cmd[1];
-    g.strokeStyle=css("--cmd");g.lineWidth=1.2;g.beginPath();
+    g.strokeStyle=css("--cmd");g.lineWidth=drawPlans?1.3:2;g.globalAlpha=drawPlans?.7:1;
+    g.beginPath();
     let st=false;
     for(let i=0;i<tt.length;i++){
       if(tt[i]<t0||tt[i]>t1){st=false;continue}
       const x=X(tt[i]),v=Y(yy[i]); st?g.lineTo(x,v):g.moveTo(x,v); st=true;
     }
-    g.stroke();
+    g.stroke();g.globalAlpha=1;
   }
+  g.restore();
+  g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
+  if(!drawPlans){
+    const msg=big?"plans hidden - zoom in (scroll) to separate them"
+                 :"click to enlarge and see every plan";
+    const w=g.measureText(msg).width;
+    g.fillStyle=css("--surface");g.globalAlpha=.9;
+    g.fillRect(padL+4,padT+4,w+10,15);g.globalAlpha=1;
+    g.fillStyle=css("--muted");g.fillText(msg,padL+9,padT+15);
+  }
+  g.fillStyle=css("--muted");
+  g.fillText(t0.toFixed(1)+"s",padL,H-5);
+  g.textAlign="right";g.fillText(t1.toFixed(1)+"s",padL+iw,H-5);g.textAlign="left";
   drawCrosshair(g,cv,padL,padT,iw,ih);
+
   g.restore();
   g.fillStyle=css("--muted");
   g.fillText(ymax.toFixed(2),2,padT+8);g.fillText(ymin.toFixed(2),2,padT+ih);
@@ -1341,7 +1420,7 @@ function renderPlans(){
   ["executed","skipped","tail"].forEach(r=>{
     lg+='<i style="background:'+css(REGION_COLOR[r])+'"></i>'+REGION_LABEL[r];
   });
-  lg+='<i style="background:'+css("--cut")+';outline:1px solid '+css("--hairline")+'"></i>markers: prefetch cut (solid) / superseded (dashed)';
+  lg+='<i style="background:'+css("--cut")+';outline:1px solid '+css("--hairline")+'"></i>axis ticks: prefetch cut (below) / superseded (above)';
   lg+='<i style="background:'+css("--cmd")+'"></i>actually commanded';
   $("planLegend").innerHTML=lg;
   $("planHint").textContent=planHintText();
@@ -1349,12 +1428,21 @@ function renderPlans(){
   panelReg.length=0;
   joints().forEach(j=>{
     const pnl=document.createElement("div"); pnl.className="panel";
-    pnl.innerHTML='<div class="ttl">'+short(j)+'</div>';
+    pnl.innerHTML='<div class="ttl" title="enlarge">'+short(j)+'</div>';
+    pnl.firstChild.onclick=()=>openModal(j,"plans");
     const cv=document.createElement("canvas"); pnl.appendChild(cv); grid.appendChild(pnl);
-    attachZoom(cv);
-    panelReg.push({cv:cv,joint:j,plans:true});
-    requestAnimationFrame(()=>drawPlanPanel(cv,j));
+    cv.style.cursor="zoom-in"; cv.title="click to enlarge, then scroll to zoom";
+    cv.onclick=()=>openModal(j,"plans");
+    panelReg.push({cv:cv,joint:j,plans:true,big:false});
+    requestAnimationFrame(()=>drawPlanPanel(cv,j,false));
   });
+  // renderPlans() clears panelReg, so an open enlarged view has to be put back
+  // or the next resize/run-switch orphans it and it stops redrawing.
+  if(modalJoint!=null&&modalKind==="plans"){
+    const mc=$("mcanvas");
+    panelReg.push({cv:mc,joint:modalJoint,big:true,plans:true});
+    drawWhenSized(mc,()=>drawPlanPanel(mc,modalJoint,true));
+  }
   requestAnimationFrame(drawPredCharts);
   requestAnimationFrame(drawAgg);
 }
