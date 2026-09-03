@@ -25,6 +25,7 @@ def render(data: dict, cfg: Options) -> str:
     html = html.replace("__V_DEPTH__", str(cfg.verdict_depth_max_steps))
     html = html.replace("__DIRCOS_REF__", str(cfg.dircos_reference))
     html = html.replace("__DIRCOS_WARN__", str(cfg.dircos_warn_below))
+    html = html.replace("__DIRCOS_USABLE__", str(cfg.dircos_usable_min))
     html = html.replace("__PLANS_WINDOW__", str(cfg.plans_window_s))
     # "</" inside a string value (a note, a task description) would terminate
     # the <script> block early; escape it inside the JSON payload.
@@ -40,10 +41,10 @@ TEMPLATE = r"""<meta charset="utf-8">
 :root{--ground:#FBFCFD;--surface:#F2F5F7;--ink:#1C2733;--muted:#5A6B7A;--hairline:#DCE3E8;
 --accent:#0E7C86;--accent-soft:#E3F1F2;--warn:#A8600F;--warn-soft:#F7EBDB;--good:#3D7A46;
 --cmd:#d62728;--act:#1f77b4;--b2:#8a5fbf;
---frozen:#5BA9D6;--ramp:#2E9B8F;--cut:#D6453C;--ghost:#8A99A6;
+--cut:#D6453C;--ghost:#8A99A6;
 --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;--disp:"Archivo","Helvetica Neue",Arial,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--frozen:#7FC4E8;--ramp:#41B6A0;--cut:#FF6B6B;--ghost:#5A6B7A}}
-:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--frozen:#7FC4E8;--ramp:#41B6A0;--cut:#FF6B6B;--ghost:#5A6B7A}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#FF6B6B;--ghost:#5A6B7A}}
+:root[data-theme="dark"]{--ground:#10161C;--surface:#171F27;--ink:#D8E1E8;--muted:#8A99A6;--hairline:#2A3540;--accent:#41B6C0;--accent-soft:#14333A;--warn:#E09A3E;--warn-soft:#3A2A14;--good:#6FB479;--cmd:#ff6b6b;--act:#5aa9e6;--b2:#b48be0;--cut:#FF6B6B;--ghost:#5A6B7A}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);font-size:14px}
 .layout{display:flex;min-height:100vh}
@@ -183,6 +184,13 @@ tr.jump:hover td{background:var(--accent-soft)}
   <div id="pagePlans" style="display:none">
     <div class="chips" id="planChips"></div>
     <div class="legend" id="planLegend"></div>
+    <div class="sec" data-sec="predq"><h2 class="sechead"><span class="caret">&#9662;</span>What the model predicted &mdash; quality across the horizon</h2>
+      <div class="secbody">
+        <div class="panel" style="cursor:default"><canvas id="hzcos" height="200"></canvas></div>
+        <div class="note">Direction continuity <b>inside a single predicted chunk</b>, at each step of the horizon. Nothing here depends on the execution horizon, the prefetch skip, or where the chunk boundaries fell &mdash; it is the policy's own output. Near <b>+1</b> the plan carries straight on; <b>0</b> is a right-angle turn every tick; <b>below 0</b> the plan doubles back on itself. Human demonstrations sit at the dashed line.</div>
+        <div class="panel" style="cursor:default;margin-top:10px"><canvas id="hzacc" height="180"></canvas></div>
+        <div class="note">How far the plan moves per tick, and its acceleration (the deployment guide's intra-chunk metric). Acceleration rising while movement stays flat means the plan is shaking rather than travelling.</div>
+      </div></div>
     <div class="sec" data-sec="planagg"><h2 class="sechead"><span class="caret">&#9662;</span>Disagreement between consecutive plans</h2>
       <div class="secbody">
         <div class="panel" style="cursor:default"><canvas id="aggcv" height="220"></canvas></div>
@@ -218,7 +226,7 @@ tr.jump:hover td{background:var(--accent-soft)}
 const DATA=__DATA__;
 const HI_ERR=__HI_ERR__, HI_NM=__HI_NM__;
 const V_SPLICE=__V_SPLICE__, V_DEPTH=__V_DEPTH__, PLANS_WINDOW=__PLANS_WINDOW__;
-const DIRCOS_REF=__DIRCOS_REF__, DIRCOS_WARN=__DIRCOS_WARN__;
+const DIRCOS_REF=__DIRCOS_REF__, DIRCOS_WARN=__DIRCOS_WARN__, DIRCOS_USABLE=__DIRCOS_USABLE__;
 const runs=DATA.runs, names=Object.keys(runs);
 let runA=names[0], runB="", view="track", side="all", page="signals";
 let vp=null;               // shared viewport {t0,t1}; null = full range
@@ -511,7 +519,7 @@ function drawCrosshair(g,cv,padL,padT,iw,ih){
 
 function redrawAll(){
   panelReg.forEach(p=>p.plans?drawPlanPanel(p.cv,p.joint):drawPanel(p.cv,p.joint,p.big));
-  if(page==="plans"){drawAgg(); const h=$("planHint"); if(h)h.textContent=planHintText();}
+  if(page==="plans"){drawPredCharts(); drawAgg(); const h=$("planHint"); if(h)h.textContent=planHintText();}
 }
 let rafPending=false;
 function scheduleRedraw(){
@@ -775,7 +783,11 @@ function renderTables(){
   const ov=runs[runA].overlap||{};
   fh+=row("chunk overlap disagreement p50/p95 (mrad)",ov.disagree_p50!=null?`${ov.disagree_p50} / ${dash(ov.disagree_p95)} over ${ov.pairs} pairs`:null);
   fh+=row("worst overlap disagreement (mrad)",ov.disagree_max!=null?`${ov.disagree_max} (chunk ${ov.disagree_max_seq})`:null,ov.disagree_max_seq);
-  fh+=row("RTC frozen-region mismatch (mrad)",ov.rtc_frozen_mismatch_p50);
+  // Evidence, not a setting: how much the steps RTC asked the server to
+  // freeze actually changed. Near zero would mean the freeze took effect; a
+  // large value confirms the request was dropped.
+  fh+=row("steps RTC asked to freeze, actual change (mrad)",ov.rtc_frozen_mismatch_p50!=null
+    ?`${ov.rtc_frozen_mismatch_p50} <span class="dim">(≈0 would mean RTC took effect)</span>`:null);
   fh+=row("discarded-tail error vs later cmd (mrad)",ov.tail_err_p50);
   fh+=row("cmd jerk within / at splice",sm.jerk_within_p50!=null?`${sm.jerk_within_p50} / ${dash(sm.jerk_splice_p50)}`:null);
   fh+=row("reversing joints at splice / within (median)",sm.rev_joints_splice_p50!=null?`${sm.rev_joints_splice_p50} / ${dash(sm.rev_joints_within_p50)}`:null);
@@ -785,6 +797,17 @@ function renderTables(){
     ?`${sm.dircos_within}${sm.dircos_within<=DIRCOS_WARN?" ⚠":""} <span class="dim">(demos ${DIRCOS_REF})</span>`:null);
   fh+=row("direction continuity at splice (cos)",sm.dircos_splice!=null
     ?`${sm.dircos_splice}${sm.dircos_splice<=DIRCOS_WARN?" ⚠":""}`:null);
+  // The same question asked of the model's own output rather than of the
+  // executed stream. Only these can separate "the policy is noisy" from
+  // "our scheduling is stitching it badly".
+  const pr=runs[runA].pred||{};
+  fh+=row("model plan: direction continuity (cos)",pr.dircos_p50!=null
+    ?`${pr.dircos_p50}${pr.dircos_p50<=DIRCOS_WARN?" ⚠":""} <span class="dim">(demos ${DIRCOS_REF}) over ${pr.n_chunks} chunks</span>`:null);
+  fh+=row("model plan: steps that reverse",pr.reversal_frac!=null
+    ?`${(pr.reversal_frac*100).toFixed(0)}%`:null);
+  fh+=row("model plan: acceleration p50/p95 (mrad/tick²)",pr.accel_p50!=null
+    ?`${pr.accel_p50} / ${dash(pr.accel_p95)} <span class="dim">on ${dash(pr.step_p50)} mrad steps</span>`:null);
+  fh+=row("model plan: last usable horizon step",bestHorizon(runs[runA]));
   fh+=row("velocity spike at splice (×median)",sm.vel_spike_ratio_p50);
   fh+=row("limit-guard held left / right",(vi.left!=null||vi.right!=null)?`${(100*(vi.left||0)).toFixed(1)}% / ${(100*(vi.right||0)).toFixed(1)}%`:null);
   fh+="</table>";
@@ -920,22 +943,24 @@ function drawHist(){
 // Which region of its chunk step k belongs to. Derived on the page (not in
 // the analysis) so recolouring never means recomputing:
 //   skipped  - expired in flight, discarded on arrival (the prefetch cut)
-//   frozen   - RTC told the server to keep these identical to the last chunk
-//   ramp     - RTC blend region between frozen and free
 //   executed - actually drove the arm
 //   tail     - predicted, then replaced by the next chunk
+//
+// There is deliberately no "RTC frozen" or "RTC ramp" region. Setting
+// rtc_enable only makes the CLIENT send the previous chunk back; the stock
+// server drops it (Gr00tPolicy.get_action documents `options` as unused, and
+// rebuilds the observation from video/state/language alone, discarding the
+// action the client attached). Colouring a band "frozen" would claim the
+// model was constrained there when nothing constrained it. The empirical
+// check for this is the frozen-region mismatch in Run facts: a large value
+// is the evidence that the freeze request had no effect.
 function regionOf(k,skip,depth,cfg){
-  const fz=(cfg&&cfg.rtc_enable)?(cfg.rtc_frozen_steps||0):0;
-  const ov=(cfg&&cfg.rtc_enable)?(cfg.rtc_overlap_steps||0):0;
-  if(k<fz)return "frozen";
-  if(k<ov)return "ramp";
   if(k<skip)return "skipped";
   if(depth>=0&&k<=depth)return "executed";
   return "tail";
 }
-const REGION_COLOR={frozen:"--frozen",ramp:"--ramp",skipped:"--ghost",
-                    executed:"--accent",tail:"--ghost"};
-const REGION_LABEL={frozen:"RTC frozen",ramp:"RTC ramp",skipped:"skipped (prefetch cut)",
+const REGION_COLOR={skipped:"--ghost",executed:"--accent",tail:"--ghost"};
+const REGION_LABEL={skipped:"skipped (prefetch cut)",
                     executed:"executed",tail:"discarded tail"};
 function planStore(){const P=runs[runA].plans; return (P&&!P.omitted)?P:null}
 function planHintText(){
@@ -992,9 +1017,8 @@ function drawPlanPanel(cv,j){
         g.stroke();g.setLineDash([]);
         k=k2;
       }
-      // the prefetch cut: everything left of here expired in flight and was
-      // discarded. If it sits right of the frozen band, RTC's frozen steps
-      // never reached the arm at all.
+      // the prefetch cut: everything left of here expired while the request
+      // was in flight and was discarded on arrival.
       if(skip>0){
         const xs=X(base+skip*P.tick_s);
         g.strokeStyle=css("--cut");g.globalAlpha=.9;g.lineWidth=1.2;
@@ -1045,6 +1069,151 @@ function drawPlanPanel(cv,j){
     if(hits>4)lines.push("… and "+(hits-4)+" more plans here");
     return hits?{lines:lines}:null;
   };
+}
+
+// ------------------------------------------- "across the horizon" charts
+// One generic line chart over horizon step k, shared by the two prediction
+// panels. Everything that varies between them is passed in, so adding a
+// series or changing a colour is a one-line edit and never a new draw
+// function.
+//   series: [{v:[...], color:"--accent", label:"…", dash:bool, dp:int}]
+//   opts:   {ymin, ymax, unit, refs:[{v,color,label}], height}
+function drawAcrossHorizon(cv,series,opts){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=opts.height;
+  if(!W)return;
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
+  const g=cv.getContext("2d");g.scale(dpr,dpr);
+  const padL=46,padR=10,padT=10,padB=22,iw=W-padL-padR,ih=H-padT-padB;
+  g.fillStyle=css("--muted");g.font="9px "+css("--mono").split(",")[0];
+  const P=runs[runA].pred;
+  if(!P){g.fillText("no chunk file for this run — nothing to read the plan from",padL,H/2);return}
+  const kmax=Math.max(...series.map(s=>s.v.length))-1;
+  if(kmax<1){g.fillText("chunks too short to measure",padL,H/2);return}
+  const X=k=>padL+iw*k/Math.max(kmax,1);
+  const Y=v=>padT+ih*(1-(v-opts.ymin)/Math.max(opts.ymax-opts.ymin,1e-9));
+
+  // Which part of the horizon was actually used. The plans store knows it
+  // per chunk; without it (a run over the plans budget) fall back to the
+  // run's own schedule numbers so the shading still appears.
+  const S=planStore(), sch=runs[runA].schedule||{}, cfg=runs[runA].cfg;
+  const med=a=>{const b=a.slice().sort((x,y)=>x-y);return b.length?b[Math.floor(b.length/2)]:0};
+  const skipMed=S?med(S.skip):(sch.skip_p50!=null?Math.round(sch.skip_p50):0);
+  const depthMed=S?med(S.depth):(sch.depth_p95!=null?Math.round(sch.depth_p95):-1);
+  let k=0;
+  while(k<=kmax){
+    const reg=regionOf(k,skipMed,depthMed,cfg);
+    let k2=k; while(k2<=kmax&&regionOf(k2,skipMed,depthMed,cfg)===reg)k2++;
+    g.fillStyle=css(REGION_COLOR[reg]);g.globalAlpha=.10;
+    g.fillRect(X(k),padT,Math.max(X(k2)-X(k),1),ih);g.globalAlpha=1;
+    if(X(k2)-X(k)>56){g.fillStyle=css(REGION_COLOR[reg]);g.fillText(REGION_LABEL[reg],X(k)+3,padT+10)}
+    k=k2;
+  }
+  (opts.refs||[]).forEach(r=>{
+    if(r.v<opts.ymin||r.v>opts.ymax)return;
+    g.strokeStyle=css(r.color);g.globalAlpha=.8;g.lineWidth=1;g.setLineDash([4,3]);
+    g.beginPath();g.moveTo(padL,Y(r.v));g.lineTo(padL+iw,Y(r.v));g.stroke();
+    g.setLineDash([]);g.globalAlpha=1;
+    g.fillStyle=css(r.color);g.fillText(r.label,padL+iw-g.measureText(r.label).width-4,Y(r.v)-3);
+  });
+  // The coherent stretch of the plan, bracketed on the axis. Drawn on both
+  // charts so the acceleration rise and the cosine collapse line up visibly.
+  if(opts.markUsable){
+    const w=usableWindow(runs[runA]);
+    if(w){
+      g.strokeStyle=css("--good");g.lineWidth=2;
+      g.beginPath();g.moveTo(X(w.from),padT+2);g.lineTo(X(w.to),padT+2);g.stroke();
+      [w.from,w.to].forEach(kk=>{g.beginPath();g.moveTo(X(kk),padT);g.lineTo(X(kk),padT+7);g.stroke()});
+      g.fillStyle=css("--good");
+      g.fillText("plan holds together here",X(w.from)+4,padT+16);
+    }
+  }
+  g.strokeStyle=css("--hairline");g.strokeRect(padL,padT,iw,ih);
+  series.forEach(s=>{
+    g.strokeStyle=css(s.color);g.lineWidth=1.6;
+    if(s.dash)g.setLineDash([3,3]);
+    g.beginPath();let started=false;
+    s.v.forEach((val,i)=>{if(val==null){started=false;return}
+      const x=X(i),y=Y(val); started?g.lineTo(x,y):g.moveTo(x,y); started=true});
+    g.stroke();g.setLineDash([]);
+  });
+  g.fillStyle=css("--muted");
+  g.fillText(String(opts.ymax)+" "+opts.unit,2,padT+8);
+  g.fillText(String(opts.ymin),2,padT+ih);
+  g.fillText("horizon step k (0 = first step of the chunk)",padL+iw/2-84,H-5);
+  g.fillText(String(kmax),W-padR-14,H-5);
+  let lx=padL+4;
+  series.forEach(s=>{g.fillStyle=css(s.color);g.fillText(s.label,lx,padT+ih-4);lx+=g.measureText(s.label).width+12});
+  drawCrosshair(g,cv,padL,padT,iw,ih);
+  cv._probe=(px,py)=>{
+    if(px<padL||px>padL+iw||py<padT||py>padT+ih)return null;
+    const kq=Math.max(0,Math.min(kmax,Math.round((px-padL)/iw*kmax)));
+    const lines=["horizon step <b>"+kq+"</b> — "+REGION_LABEL[regionOf(kq,skipMed,depthMed,cfg)]];
+    series.forEach(s=>{const v=s.v[kq];
+      if(v!=null)lines.push(s.label+": <b>"+v.toFixed(s.dp)+"</b> "+(s.unit||opts.unit))});
+    return {lines,snapX:X(kq)};
+  };
+}
+
+// The stretch of the horizon the policy actually plans coherently: the
+// longest unbroken run of steps whose direction cosine holds at or above
+// DIRCOS_USABLE. This is the window an execution horizon should sit inside —
+// executing past its end means driving the arm with the part of the plan the
+// model was no longer predicting a trajectory in.
+function usableWindow(r){
+  const P=r.pred; if(!P||!P.dircos_k)return null;
+  const d=P.dircos_k;
+  let bi=-1,bl=0,i=0;
+  while(i<d.length){
+    if(d[i]==null||d[i]<DIRCOS_USABLE){i++;continue}
+    let j=i; while(j<d.length&&d[j]!=null&&d[j]>=DIRCOS_USABLE)j++;
+    if(j-i>bl){bl=j-i;bi=i}
+    i=j;
+  }
+  return bi<0?null:{from:bi,to:bi+bl-1,len:bl};
+}
+// Where this run's execution actually landed on the horizon — measured, not
+// configured. It starts at the prefetch cut (steps that expired in flight are
+// skipped) and ends at the deepest step reached before the next chunk took
+// over. With prefetch that is well short of the configured execution horizon,
+// so the configured value would overstate the span; it is only the fallback
+// for runs with no schedule numbers. Clamped to the chunk, which cannot be
+// executed past its last step.
+function execSpan(r){
+  const sch=r.schedule||{}, H=(r.pred||{}).H;
+  const from=sch.skip_p50!=null?Math.round(sch.skip_p50):0;
+  let to=sch.depth_p95!=null?Math.round(sch.depth_p95):null;
+  if(to==null&&r.cfg&&r.cfg.execution_horizon!=null)to=from+r.cfg.execution_horizon-1;
+  if(to==null)return null;
+  if(H)to=Math.min(to,H-1);
+  return to>=from?{from:from,to:to}:null;
+}
+function bestHorizon(r){
+  const P=r.pred; if(!P||!P.dircos_k)return null;
+  const w=usableWindow(r);
+  if(!w)return `<span class="warn">none</span> <span class="dim">— no run of steps holds ${DIRCOS_USABLE}; the plan is noisy end to end</span>`;
+  let s=`k=${w.from}–${w.to} <span class="dim">(${w.len} steps at or above ${DIRCOS_USABLE})</span>`;
+  const e=execSpan(r);
+  if(e){
+    const outside=Math.max(0,w.from-e.from)+Math.max(0,e.to-w.to);
+    s+=`<br><span class="dim">this run executed k=${e.from}–${e.to} — `
+      +(outside?`<b>${outside} of those ${e.to-e.from+1} steps sit outside it</b> ⚠`:"inside it")+"</span>";
+  }
+  return s;
+}
+
+function drawPredCharts(){
+  if(page!=="plans")return;
+  const P=runs[runA].pred, cos=$("hzcos"), acc=$("hzacc");
+  if(cos)drawAcrossHorizon(cos,P?[{v:P.dircos_k,color:"--cmd",label:"direction cosine",dp:2,unit:""}]:[{v:[],color:"--cmd",label:"",dp:2}],
+    {ymin:-1,ymax:1,unit:"",height:200,markUsable:true,
+     refs:[{v:DIRCOS_REF,color:"--good",label:"demonstrations "+DIRCOS_REF},
+           {v:0,color:"--muted",label:"right-angle turn"}]});
+  if(acc){
+    const mx=P?Math.max(1,...[...(P.accel_k||[]),...(P.step_k||[])].filter(v=>v!=null)):1;
+    drawAcrossHorizon(acc,P?[{v:P.step_k,color:"--act",label:"movement per step",dp:1,unit:"mrad"},
+                             {v:P.accel_k,color:"--warn",label:"acceleration",dp:1,unit:"mrad/tick²"}]:[{v:[],color:"--act",label:"",dp:1}],
+      {ymin:0,ymax:Math.ceil(mx*1.1),unit:"mrad",height:180,markUsable:true});
+  }
 }
 
 function drawAgg(){
@@ -1114,7 +1283,7 @@ function renderPlans(){
   else if(!P)chips+='<span class="chip">no .chunks.npz — this run predates chunk logging</span>';
   $("planChips").innerHTML=chips;
   let lg="";
-  ["executed","frozen","ramp","skipped","tail"].forEach(r=>{
+  ["executed","skipped","tail"].forEach(r=>{
     lg+='<i style="background:'+css(REGION_COLOR[r])+'"></i>'+REGION_LABEL[r];
   });
   lg+='<i style="background:'+css("--cut")+'"></i>prefetch cut (solid) / superseded (dashed)';
@@ -1131,6 +1300,7 @@ function renderPlans(){
     panelReg.push({cv:cv,joint:j,plans:true});
     requestAnimationFrame(()=>drawPlanPanel(cv,j));
   });
+  requestAnimationFrame(drawPredCharts);
   requestAnimationFrame(drawAgg);
 }
 
@@ -1147,6 +1317,10 @@ function renderMatrix(){
     ["dir cos in/splice",r=>{const s=r.smooth||{};
       return s.dircos_within==null?"—":`${s.dircos_within} / ${dash(s.dircos_splice)}`}],
     ["overlap mrad",r=>dash((r.overlap||{}).disagree_p50)],
+    ["plan cos",r=>dash((r.pred||{}).dircos_p50)],
+    ["usable k",r=>{const w=usableWindow(r); if(!w)return "—";
+      const e=execSpan(r), bad=e&&(e.from<w.from||e.to>w.to);
+      return `${w.from}–${w.to}${bad?" ⚠":""}`}],
     ["stalls",r=>dash((r.schedule||{}).stall_count)],
     ["eff Hz",r=>dash((r.schedule||{}).effective_hz)],
     ["grasp ✓/att",r=>{const g=graspSummary(r);return g.att?`${g.succ}/${g.att}`:"—"}],
