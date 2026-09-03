@@ -88,9 +88,7 @@ nothing to install for the reader. Light and dark theme follow the system.
 
 - `<run>.chunks.npz` beside a CSV is picked up automatically; from it the run
   gains **chunk overlap disagreement** (true stability over the whole shared
-  stretch of consecutive chunks, p50/p95/worst with a jump link), the
-  **frozen-region check** (how much the steps RTC asked to freeze actually
-  changed — the empirical evidence that a stock server drops the request),
+  stretch of consecutive chunks, p50/p95/worst with a jump link)
   and the **discarded-tail error** curve on the chunk-profile plot (was the
   never-executed tail any good — the direct evidence for a deeper execution
   horizon). The matrix gains an *overlap mrad* column. Runs without the file
@@ -116,16 +114,19 @@ nothing to install for the reader. Light and dark theme follow the system.
   Plans draw when zoomed under `plans_window_s`; hover names the chunk, step
   and region. Needs a `.chunks.npz`; runs without one say so.
 
-## Prefetch / RTC awareness (client v0.4+)
+## Prefetch awareness (client v0.4+)
 
 - Chunk boundaries come from `inference_seq` changes, so prefetch runs
   (where `horizon_idx` never hits 0) are read correctly alongside old
   blocking runs in the same folder.
 - The `<run>.meta.json` sidecar is picked up automatically and shown in the
   chips, Run facts and the matrix; runs without one say "config unknown".
-- The new per-chunk columns (`chunk_len`, `skip_steps`, `rtc_applied`,
-  `buffer_len`) feed the scheduling metrics when present and degrade to "—"
-  when not.
+- The new per-chunk columns (`chunk_len`, `skip_steps`, `buffer_len`) feed
+  the scheduling metrics when present and degrade to "—" when not.
+- Runs configured with `rtc_enable` are read as plain prefetch runs, because
+  that is what they are — the flag only makes the client attach the previous
+  chunk, which a stock server discards. The config line records that it was
+  set. RTC-specific metrics live on the `feat/rtc-metrics` branch.
 - The tracking table's `bnd` settle diagnosis is computed only for runs whose
   boundaries actually stalled; long tick gaps in a prefetch run are reported
   as starvation instead of expected boundaries.
