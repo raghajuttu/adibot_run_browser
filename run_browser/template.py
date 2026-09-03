@@ -23,6 +23,8 @@ def render(data: dict, cfg: Options) -> str:
     html = html.replace("__HI_NM__", str(cfg.hi_contact_nm))
     html = html.replace("__V_SPLICE__", str(cfg.verdict_splice_ratio_max))
     html = html.replace("__V_DEPTH__", str(cfg.verdict_depth_max_steps))
+    html = html.replace("__DIRCOS_REF__", str(cfg.dircos_reference))
+    html = html.replace("__DIRCOS_WARN__", str(cfg.dircos_warn_below))
     # "</" inside a string value (a note, a task description) would terminate
     # the <script> block early; escape it inside the JSON payload.
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
@@ -199,6 +201,7 @@ tr.jump:hover td{background:var(--accent-soft)}
 const DATA=__DATA__;
 const HI_ERR=__HI_ERR__, HI_NM=__HI_NM__;
 const V_SPLICE=__V_SPLICE__, V_DEPTH=__V_DEPTH__;
+const DIRCOS_REF=__DIRCOS_REF__, DIRCOS_WARN=__DIRCOS_WARN__;
 const runs=DATA.runs, names=Object.keys(runs);
 let runA=names[0], runB="", view="track", side="all", page="signals";
 let vp=null;               // shared viewport {t0,t1}; null = full range
@@ -748,6 +751,12 @@ function renderTables(){
   fh+=row("splice p95 / max (mrad)",sm.splice_p95!=null?`${sm.splice_p95} / ${sm.splice_max} (chunk ${sm.splice_max_seq})`:null,sm.splice_max_seq);
   fh+=row("cmd jerk within / at splice",sm.jerk_within_p50!=null?`${sm.jerk_within_p50} / ${dash(sm.jerk_splice_p50)}`:null);
   fh+=row("reversing joints at splice / within (median)",sm.rev_joints_splice_p50!=null?`${sm.rev_joints_splice_p50} / ${dash(sm.rev_joints_within_p50)}`:null);
+  // Direction continuity is the sharpest smoothness signal: within-chunk tells
+  // you whether the MODEL is smooth, at-splice whether the seam is.
+  fh+=row("direction continuity within chunk (cos)",sm.dircos_within!=null
+    ?`${sm.dircos_within}${sm.dircos_within<=DIRCOS_WARN?" ⚠":""} <span class="dim">(demos ${DIRCOS_REF})</span>`:null);
+  fh+=row("direction continuity at splice (cos)",sm.dircos_splice!=null
+    ?`${sm.dircos_splice}${sm.dircos_splice<=DIRCOS_WARN?" ⚠":""}`:null);
   fh+=row("velocity spike at splice (×median)",sm.vel_spike_ratio_p50);
   fh+=row("limit-guard held left / right",(vi.left!=null||vi.right!=null)?`${(100*(vi.left||0)).toFixed(1)}% / ${(100*(vi.right||0)).toFixed(1)}%`:null);
   fh+="</table>";
@@ -876,6 +885,8 @@ function renderMatrix(){
     ["skip p50",r=>dash((r.schedule||{}).skip_p50)],
     ["depth p95",r=>dash((r.schedule||{}).depth_p95)],
     ["splice ×",r=>dash((r.smooth||{}).splice_ratio)],
+    ["dir cos in/splice",r=>{const s=r.smooth||{};
+      return s.dircos_within==null?"—":`${s.dircos_within} / ${dash(s.dircos_splice)}`}],
     ["stalls",r=>dash((r.schedule||{}).stall_count)],
     ["eff Hz",r=>dash((r.schedule||{}).effective_hz)],
     ["grasp ✓/att",r=>{const g=graspSummary(r);return g.att?`${g.succ}/${g.att}`:"—"}],
