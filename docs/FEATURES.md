@@ -45,8 +45,9 @@ nothing to install for the reader. Light and dark theme follow the system.
   behind the splice ratio, with the within-chunk median as a reference line).
 - **Semantic zoom** — the page embeds the raw cmd/actual samples (size-guarded
   in `config.py`; oversize runs fall back to decimated, flagged on the chip)
-  and re-decimates at draw time. Scroll to zoom, drag to pan, double-click to
-  reset; the window is shared across all panels so joints stay time-aligned.
+  and re-decimates at draw time. Click a panel to enlarge it, then scroll to
+  zoom, drag to pan and double-click to reset — pointer zoom applies to the
+  enlarged view alone, so one panel can no longer pan the whole dashboard.
   Levels of detail as you close in: chunk labels with splice sizes in mrad,
   then one dot per sample with its `horizon_idx` underneath. X is `t_rel`, so
   blocking-run stalls appear as real gaps.
@@ -58,8 +59,8 @@ nothing to install for the reader. Light and dark theme follow the system.
   size; the histogram gives the bin range and tick counts; the scatters name the
   run and its coordinates.
 - **Joint filter** — all / left / right.
-- **Click a panel's title to enlarge it** (the plot area itself zooms/pans);
-  the enlarged view shares the same window and interactions.
+- **Click a panel to enlarge it** — on the signals grid and the plans grid
+  alike; the enlarged view owns its own zoom, discarded when it closes.
 - **Overlays** — chunk-boundary markers and grasp shading, each toggleable.
 - **Compare mode** — overlay any second run dashed, with side-by-side
   tracking and chunk-profile tables (handles runs with different execution
@@ -93,6 +94,17 @@ nothing to install for the reader. Light and dark theme follow the system.
   never-executed tail any good — the direct evidence for a deeper execution
   horizon). The matrix gains an *overlap mrad* column. Runs without the file
   degrade to "—" as always.
+
+- **Jitter diagnosis** — the deployment guide's three metrics computed to its
+  own definitions (L2 across joints, unweighted mean, all joints): intra-chunk
+  acceleration, boundary position jump, boundary momentum-shift cosine.
+  Metrics 2 and 3 are reported both literally and across the steps the run
+  actually joined, since prefetch means step 0 of a new chunk is never sent.
+  Paired with the same smoothness statistics computed on the MEASURED joints —
+  the only numbers that reflect what a person watching the arm sees, and the
+  only way to reach the guide's Case C. A derived verdict names the case
+  (none / A / B / A+B / C) and says why. Matrix columns *case*, *arm cos*,
+  *M1 accel*, *M2 jump*, *M3 cos*.
 
 - **Model-plan metrics** — the same smoothness questions asked of the
   policy's raw output rather than the executed stream, so nothing depends on

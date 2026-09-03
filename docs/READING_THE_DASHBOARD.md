@@ -66,8 +66,8 @@ runs show "config unknown" — everything else still works.
 
 ## 2. The five signal views
 
-One panel per joint, full run on the x-axis. Click a panel's **title** to
-enlarge it; the plot area itself is for zooming (next section). The section
+One panel per joint, full run on the x-axis. Click a panel to enlarge it, and
+zoom or pan inside that view (next section). The section
 heading always names what is currently plotted and its units, so it reads
 "Measured joint effort (Nm)" rather than a generic label.
 
@@ -82,10 +82,13 @@ choice persists between visits, and the last visible run cannot be hidden.
 The page embeds the raw command and actual-position arrays, so zooming reveals
 real data, not bigger pixels:
 
-- **scroll** on any plot zooms around the cursor; **drag** pans;
-  **double-click** resets to the full run.
-- The time window is **shared across every panel** (and the enlarged view), so
-  all joints stay aligned while you move around.
+- **Click any plot to enlarge it**, then **scroll** to zoom around the cursor,
+  **drag** to pan and **double-click** to reset. Zooming happens only inside
+  the enlarged view: dragging one small panel used to move all sixteen, which
+  is not what anyone means by panning a chart. Closing it returns the grid to
+  the full run.
+- The grid still follows a **jump** from a table row, so clicking a contact or
+  a grasp moves every panel to that moment together.
 - Detail appears as you go: far out you see today's overview line; closer, the
   chunk boundaries get labelled with their chunk number and the **splice size
   in mrad**; closest, every sample becomes a dot with its `horizon_idx`
@@ -218,6 +221,88 @@ How to read it:
   `depth p95`).
 - Comparing two runs with different execution horizons (16 vs 25) in this
   table is the direct way to decide whether a longer horizon is safe.
+
+---
+
+## 5a. Jitter diagnosis (the deployment guide's three metrics)
+
+The first section on the signals page. It answers one question: **if the robot
+is shaking, which of the guide's three cases is it?**
+
+### Read the verdict first, then the numbers
+
+The coloured box states the case and why. It is derived, not configured, and
+the reasoning is spelled out so you can disagree with it.
+
+The order matters. Before asking where the jitter comes from, the box checks
+whether there **is** any: the measured joints have their own direction
+continuity, and if that is at or above `measured_smooth_min` (0.8), the arm is
+moving smoothly whatever the command was doing. A plan can turn a right angle
+every tick and never reach the joints, because the arm's inertia and the
+low-level controller filter it. That case is reported as **no visible jitter**,
+which the guide's tree has no branch for — it assumes a ragged chunk means a
+shaking robot. The remedy there is *nothing*: optimising the plan's smoothness
+would be chasing a number the hardware discards.
+
+| verdict | what it means | the guide's remedy |
+|---|---|---|
+| **no visible jitter** | the arm is smooth; the plan may not be | none needed |
+| **Case A** | the plan turns inside a single chunk, seams are clean | more/better data, longer training |
+| **Case B** | chunks are smooth but joined badly | state-relative actions, chunk blending |
+| **Case A+B** | both | fix the model first; the seam usually follows |
+| **Case C** | chunks are smooth, the arm is not | drive control, interpolation, hardware |
+
+### The three metrics
+
+Computed exactly as the guide defines them — L2 norm across the joint
+dimension, unweighted mean, every joint included — so a number from NVIDIA is
+directly comparable. They are deliberately **not** merged with this
+dashboard's own smoothness numbers, which pool with a max across arm joints
+and take medians: that is more robust to one bad joint and to an outlier
+chunk, but it is a different quantity, and averaging the two conventions would
+give a figure matching neither. Both are on the page.
+
+- **Metric 1 — mean intra-chunk acceleration.** `pos[k+1] - 2·pos[k] +
+  pos[k-1]`, L2 across joints, averaged over every step of every chunk. This
+  is the Case A number: it measures the model's own output and nothing about
+  scheduling can change it. Shown for all joints (the guide's figure) and for
+  arm joints only, because a gripper snapping shut contributes a large
+  acceleration that has nothing to do with arm jitter.
+- **Metric 2 — position jump at the chunk boundary.** L2 distance between the
+  last executed step of one chunk and step 0 of the next.
+- **Metric 3 — momentum shift at the boundary.** Cosine between the velocity
+  ending one chunk and the velocity starting the next. Closer to 1 is better;
+  the guide's `+1e-8` guard means a stationary boundary scores ~0 and is
+  counted, rather than dropped.
+
+### Why metrics 2 and 3 appear twice
+
+**`literal` follows the formula; `as executed` is what happened.**
+
+The guide's boundary metrics assume the client executes a chunk from step 0.
+Under prefetch that is false: the steps that expired while the request was in
+flight are skipped, so step 0 of a new chunk is a position the arm was never
+sent, and the seam the formula measures never occurred. On these runs the skip
+is 7–8 steps, so `literal` compares two points that were never consecutive.
+
+`as executed` repeats both metrics across the steps the run actually joined —
+the last step really executed from the old chunk against the first step really
+executed from the new one. On a blocking run (skip 0) the two are identical;
+under prefetch, expect `as executed` to be the larger and more honest jump.
+
+Use `literal` when comparing against someone else's published figure. Use `as
+executed` when deciding whether *your* seam is a problem.
+
+### The arm itself
+
+The last two rows are the same questions asked of `actual_pos_`, and they are
+the only numbers here that reflect what a person watching the robot sees.
+Nothing else in the dashboard measures the measured stream this way, and
+without it Case C — "the chunks look smooth, the robot still shakes" — has no
+number and cannot be distinguished from a clean run.
+
+Runs with no `.chunks.npz` still get a verdict: the arm's own smoothness is
+enough to say whether there is visible jitter, though not to place it.
 
 ---
 
