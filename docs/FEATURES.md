@@ -59,8 +59,24 @@ nothing to install for the reader. Light and dark theme follow the system.
   size; the histogram gives the bin range and tick counts; the scatters name the
   run and its coordinates.
 - **Joint filter** — all / left / right.
-- **Click a panel to enlarge it** — on the signals grid and the plans grid
-  alike; the enlarged view owns its own zoom, discarded when it closes.
+- **Click any chart to enlarge it** — the per-joint panels on both grids, the
+  chunk profile, the step distribution, both horizon charts and the
+  disagreement curve. Time-axis charts zoom and pan inside the enlarged view;
+  the others enlarge with hover readouts and say they have nothing to zoom.
+  Esc closes. The enlarged view owns its own zoom, discarded when it closes.
+- **Run configuration** — every field of the `.meta.json` sidecar in six
+  groups (policy, scheduling, guards, enabled, server, outcome), with unknown
+  fields listed rather than dropped, and *config unknown* for runs without one.
+- **Tables stacked, not side by side** — the two-column layout crammed Run
+  facts beside a 33-row chunk-profile table; sections now run in reading
+  order (configuration, jitter diagnosis, run facts, tracking, chunk profile,
+  step distribution, contacts, grasps), each wide table in its own scroller.
+- **Run matrix** headers are grouped (run, configuration, scheduling,
+  smoothness, jitter diagnosis, model plan, outcome) and the run column stays
+  put while the rest scrolls.
+- **Plan panels** draw chunk boundaries in the same pink as the signals page,
+  labelled when there is room, and show executed steps only in the grid — the
+  skipped head and discarded tail appear in the enlarged view.
 - **Overlays** — chunk-boundary markers and grasp shading, each toggleable.
 - **Compare mode** — overlay any second run dashed, with side-by-side
   tracking and chunk-profile tables (handles runs with different execution
