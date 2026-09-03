@@ -91,9 +91,18 @@ label.chk{display:flex;gap:6px;align-items:center;font-family:var(--mono);font-s
 canvas{width:100%;display:block}
 h2{font-size:14px;font-weight:700;margin:26px 0 8px}
 table{border-collapse:collapse;font-family:var(--mono);font-size:11.5px;width:100%}
+table.kv td:first-child{width:46%;color:var(--muted)}
+table.kv td.r{white-space:normal}
+.cfggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px 28px}
+.cfggrid h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:500;margin:10px 0 2px}
+.cfggrid table td{white-space:normal}
 th{text-align:left;font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:500;padding:4px 12px 4px 0;border-bottom:1px solid var(--ink);white-space:nowrap}
 td{padding:3px 12px 3px 0;border-bottom:1px solid var(--hairline);white-space:nowrap;font-variant-numeric:tabular-nums}
 td.r,th.r{text-align:right}
+table.matrix th.grp{text-align:center;border-bottom:1px solid var(--hairline);color:var(--accent);letter-spacing:.1em;padding-bottom:2px}
+table.matrix th.grp:not(:first-child),table.matrix td.gs,table.matrix th.gs{border-left:1px solid var(--hairline);padding-left:10px}
+table.matrix td:first-child,table.matrix th:first-child{position:sticky;left:0;background:var(--ground);z-index:1;border-right:1px solid var(--hairline);padding-right:10px}
+table.matrix th:first-child{background:var(--ground)}
 td.hi{color:var(--warn);font-weight:600}
 tr.jump{cursor:pointer}
 tr.jump:hover td{background:var(--accent-soft)}
@@ -163,53 +172,49 @@ tr.jump:hover td{background:var(--accent-soft)}
         <div class="grid" id="grid"></div>
       </div>
     </div>
-    <div class="cols">
-      <div>
-        <div class="sec" data-sec="tracking"><h2 class="sechead"><span class="caret">&#9662;</span>Tracking (mrad)</h2>
-          <div class="secbody scrollbox" id="statsbox"></div></div>
-        <div class="sec" data-sec="jitter"><h2 class="sechead"><span class="caret">&#9662;</span>Jitter diagnosis</h2>
-          <div class="secbody">
-            <div id="verdictBox"></div>
-            <div id="nvbox"></div>
-            <div class="note">The three metrics from the deployment guide's jitter section, computed exactly as it defines them &mdash; L2 norm across the joint dimension, unweighted mean, every joint. <b>as executed</b> repeats metrics 2 and 3 across the steps this run actually joined, because under prefetch step 0 of a new chunk is never sent to the arm and the seam the literal formula measures did not happen.</div>
-          </div></div>
-        <div class="sec" data-sec="facts"><h2 class="sechead"><span class="caret">&#9662;</span>Run facts</h2>
-          <div class="secbody scrollbox" id="factsbox"></div></div>
-        <div class="sec" data-sec="dist"><h2 class="sechead"><span class="caret">&#9662;</span>Step distribution (mrad)</h2>
-          <div class="secbody">
-            <div class="panel" style="cursor:default"><canvas id="histcv" height="150"></canvas></div>
-            <div class="note">|&Delta;cmd| per tick, within chunks (teal) vs at chunk switches (amber), normalised. Shows whether a splice ratio is a consistent offset or a few outliers.</div>
-          </div></div>
-      </div>
-      <div>
-        <div class="sec" data-sec="profile"><h2 class="sechead"><span class="caret">&#9662;</span>Chunk profile</h2>
-          <div class="secbody">
-            <div class="panel" style="cursor:default"><canvas id="profcv" height="180"></canvas></div>
-            <div class="note" style="margin-bottom:8px">error (solid, offset-corrected) and cmd step (dashed) vs horizon_idx — the knee is where late steps stop being trustworthy. Purple = compare run.</div>
-            <div class="scrollbox" id="profbox"></div>
-          </div></div>
-        <div class="sec" data-sec="contacts"><h2 class="sechead"><span class="caret">&#9662;</span>Contacts</h2>
-          <div class="secbody scrollbox" id="ctcbox"></div></div>
-        <div class="sec" data-sec="grasps"><h2 class="sechead"><span class="caret">&#9662;</span>Grasps</h2>
-          <div class="secbody scrollbox" id="graspbox"></div></div>
-      </div>
-    </div>
+    <div class="sec" data-sec="config"><h2 class="sechead"><span class="caret">&#9662;</span>Run configuration</h2>
+      <div class="secbody"><div id="configbox"></div></div></div>
+    <div class="sec" data-sec="jitter"><h2 class="sechead"><span class="caret">&#9662;</span>Jitter diagnosis</h2>
+      <div class="secbody">
+        <div id="verdictBox"></div>
+        <div class="scrollbox" id="nvbox"></div>
+        <div class="note">The three metrics from the deployment guide's jitter section, computed exactly as it defines them &mdash; L2 norm across the joint dimension, unweighted mean, every joint. <b>as executed</b> repeats metrics 2 and 3 across the steps this run actually joined, because under prefetch step 0 of a new chunk is never sent to the arm and the seam the literal formula measures did not happen.</div>
+      </div></div>
+    <div class="sec" data-sec="facts"><h2 class="sechead"><span class="caret">&#9662;</span>Run facts</h2>
+      <div class="secbody scrollbox" id="factsbox"></div></div>
+    <div class="sec" data-sec="tracking"><h2 class="sechead"><span class="caret">&#9662;</span>Tracking (mrad)</h2>
+      <div class="secbody scrollbox" id="statsbox"></div></div>
+    <div class="sec" data-sec="profile"><h2 class="sechead"><span class="caret">&#9662;</span>Chunk profile</h2>
+      <div class="secbody">
+        <div class="panel big" style="cursor:zoom-in" title="click to enlarge"><canvas id="profcv" height="200"></canvas></div>
+        <div class="note" style="margin-bottom:8px">error (solid, offset-corrected) and cmd step (dashed) vs horizon_idx — the knee is where late steps stop being trustworthy. Purple = compare run.</div>
+        <div class="scrollbox" id="profbox"></div>
+      </div></div>
+    <div class="sec" data-sec="dist"><h2 class="sechead"><span class="caret">&#9662;</span>Step distribution (mrad)</h2>
+      <div class="secbody">
+        <div class="panel big" style="cursor:zoom-in" title="click to enlarge"><canvas id="histcv" height="170"></canvas></div>
+        <div class="note">|&Delta;cmd| per tick, within chunks (teal) vs at chunk switches (amber), normalised. Shows whether a splice ratio is a consistent offset or a few outliers.</div>
+      </div></div>
+    <div class="sec" data-sec="contacts"><h2 class="sechead"><span class="caret">&#9662;</span>Contacts</h2>
+      <div class="secbody scrollbox" id="ctcbox"></div></div>
+    <div class="sec" data-sec="grasps"><h2 class="sechead"><span class="caret">&#9662;</span>Grasps</h2>
+      <div class="secbody scrollbox" id="graspbox"></div></div>
   </div>
   <div id="pagePlans" style="display:none">
     <div class="chips" id="planChips"></div>
     <div class="sec" data-sec="predq"><h2 class="sechead"><span class="caret">&#9662;</span>What the model predicted &mdash; quality across the horizon</h2>
       <div class="secbody">
         <div class="legend" id="hzcosLg"></div>
-        <div class="panel" style="cursor:default"><canvas id="hzcos" height="230"></canvas></div>
+        <div class="panel big" style="cursor:zoom-in" title="click to enlarge"><canvas id="hzcos" height="230"></canvas></div>
         <div class="note">Direction continuity <b>inside a single predicted chunk</b>, at each step of the horizon. Nothing here depends on the execution horizon, the prefetch skip, or where the chunk boundaries fell &mdash; it is the policy's own output. Near <b>+1</b> the plan carries straight on; <b>0</b> is a right-angle turn every tick; <b>below 0</b> the plan doubles back on itself. Human demonstrations sit at the dashed line.</div>
         <div class="legend" id="hzaccLg" style="margin-top:12px"></div>
-        <div class="panel" style="cursor:default"><canvas id="hzacc" height="205"></canvas></div>
+        <div class="panel big" style="cursor:zoom-in" title="click to enlarge"><canvas id="hzacc" height="205"></canvas></div>
         <div class="note">How far the plan moves per tick, and its acceleration (the deployment guide's intra-chunk metric). Acceleration rising while movement stays flat means the plan is shaking rather than travelling.</div>
       </div></div>
     <div class="sec" data-sec="planagg"><h2 class="sechead"><span class="caret">&#9662;</span>Disagreement between consecutive plans</h2>
       <div class="secbody">
         <div class="legend" id="aggLg"></div>
-        <div class="panel" style="cursor:default"><canvas id="aggcv" height="220"></canvas></div>
+        <div class="panel big" style="cursor:zoom-in" title="click to enlarge"><canvas id="aggcv" height="220"></canvas></div>
         <div class="note">How far apart two consecutive chunks are about the same instant, by how many steps past the switch it is. Line = median over every chunk pair, band = p10&ndash;p90. Flat and low means each new plan continues the old one.</div>
       </div></div>
     <div class="sec" data-sec="planjoints"><h2 class="sechead"><span class="caret">&#9662;</span>Every plan, per joint</h2>
@@ -548,7 +553,7 @@ function drawCrosshair(g,cv,padL,padT,iw,ih){
 }
 
 function redrawAll(){
-  panelReg.forEach(p=>p.plans?drawPlanPanel(p.cv,p.joint,p.big):drawPanel(p.cv,p.joint,p.big));
+  panelReg.forEach(p=>p.draw?p.draw():(p.plans?drawPlanPanel(p.cv,p.joint,p.big):drawPanel(p.cv,p.joint,p.big)));
   if(page==="plans"){drawPredCharts(); drawAgg(); const h=$("planHint"); if(h)h.textContent=planHintText();}
 }
 let rafPending=false;
@@ -614,18 +619,33 @@ function closeModal(){
   modalJoint=null; modalKind=null; mvp=null;
   for(let i=panelReg.length-1;i>=0;i--)if(panelReg[i].big)panelReg.splice(i,1);
 }
-// kind: "signals" (command vs actual) or "plans" (every predicted chunk).
+// Every chart on the page can be enlarged. The joint-based kinds take the
+// joint; the fixed charts take none. `time` says whether the x axis is time,
+// which is what decides whether scroll-to-zoom has any meaning there.
+const ENLARGE={
+  signals:{time:true, title:j=>short(j)+" — "+(VIEW_TITLES[view]||view), draw:(cv,j)=>drawPanel(cv,j,true)},
+  plans:  {time:true, title:j=>short(j)+" — every plan",             draw:(cv,j)=>drawPlanPanel(cv,j,true)},
+  profile:{time:false,title:()=>"Chunk profile — error and cmd step by horizon step", draw:cv=>drawProfile(cv,true)},
+  hist:   {time:false,title:()=>"Step distribution — within chunks vs at switches",   draw:cv=>drawHist(cv,true)},
+  hzcos:  {time:false,title:()=>"Direction continuity across the horizon",            draw:cv=>drawHzCos(cv,true)},
+  hzacc:  {time:false,title:()=>"Movement and acceleration across the horizon",       draw:cv=>drawHzAcc(cv,true)},
+  agg:    {time:false,title:()=>"Disagreement between consecutive plans",             draw:cv=>drawAgg(cv,true)},
+};
 function openModal(j,kind){
   modalJoint=j; modalKind=kind||"signals"; mvp=null;
+  const E=ENLARGE[modalKind]; if(!E)return;
   $("modal").classList.add("on");
-  $("mttl").textContent=short(j)+" — "+(modalKind==="plans"
-    ? "every plan" : (VIEW_TITLES[view]||view))
-    +"   ·   scroll to zoom, drag to pan, double-click to reset";
+  $("mttl").textContent=E.title(j)+"   ·   "+(E.time
+    ? "scroll to zoom, drag to pan, double-click to reset"
+    : "hover for values · esc or close to return");
   const cv=$("mcanvas");
   if(!cv._zoomed){attachZoom(cv);cv._zoomed=true}
-  panelReg.push({cv,joint:j,big:true,plans:modalKind==="plans"});
-  drawWhenSized(cv,()=>modalKind==="plans"?drawPlanPanel(cv,j,true):drawPanel(cv,j,true));
+  cv.style.cursor=E.time?"grab":"crosshair";
+  const entry={cv,joint:j,big:true,plans:modalKind==="plans",draw:()=>E.draw(cv,j)};
+  panelReg.push(entry);
+  drawWhenSized(cv,entry.draw);
 }
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("modal").classList.contains("on"))closeModal()});
 
 // ---------------------------------------------------------------- sidebar
 function buildSidebar(){
@@ -660,6 +680,11 @@ document.querySelectorAll("#pages button").forEach(b=>b.onclick=()=>{page=b.data
 // scheduleRedraw only repaints canvases — the legend is HTML.
 const onOverlayToggle=()=>{page==="signals"?render():scheduleRedraw()};
 $("cbBounds").onchange=onOverlayToggle; $("cbGrasp").onchange=onOverlayToggle;
+[["profcv","profile"],["histcv","hist"],["hzcos","hzcos"],["hzacc","hzacc"],["aggcv","agg"]].forEach(([id,kind])=>{
+  const c=$(id); if(!c)return;
+  c.style.cursor="zoom-in"; c.title="click to enlarge";
+  c.onclick=()=>openModal(null,kind);
+});
 
 // ---- collapsible sections: click any heading to hide/show its content ----
 // Collapsed set persists per browser (best effort — private windows etc. may
@@ -757,12 +782,10 @@ function render(){
     panelReg.push({cv,joint:j,big:false});
     requestAnimationFrame(()=>drawPanel(cv,j,false));
   });
-  if(modalJoint!=null){
-    const mc=$("mcanvas");
-    panelReg.push({cv:mc,joint:modalJoint,big:true,plans:modalKind==="plans"});
-    drawWhenSized(mc,()=>modalKind==="plans"
-      ? drawPlanPanel(mc,modalJoint,true)
-      : drawPanel(mc,modalJoint,true))}
+  if(modalKind&&ENLARGE[modalKind]){
+    const mc=$("mcanvas"), E=ENLARGE[modalKind], jj=modalJoint;
+    const entry={cv:mc,joint:jj,big:true,plans:modalKind==="plans",draw:()=>E.draw(mc,jj)};
+    panelReg.push(entry); drawWhenSized(mc,entry.draw)}
   renderTables();
   requestAnimationFrame(()=>{drawProfile();drawHist()});
 }
@@ -840,10 +863,11 @@ function renderTables(){
     ms.accel!=null?`${ms.accel} / ${dash(ms.step)}`:null);
   $("nvbox").innerHTML=nh+"</table>";
 
+  renderConfig();
   const sc=runs[runA].schedule||{}, sm=runs[runA].smooth||{}, vi=runs[runA].violations||{}, cfg=runs[runA].cfg;
-  let fh="<table>";
+  let fh="<table class=\"kv\">";
   const row=(k,v,jumpSeq)=>`<tr${jumpSeq!=null?` class="jump" data-seq="${jumpSeq}" title="jump to this chunk"`:""}><td>${k}</td><td class="r">${dash(v)}</td></tr>`;
-  fh+=row("replan cycle (steps, p50/p95)",sc.cycle_p50!=null?`${sc.cycle_p50} / ${sc.cycle_p95}`:null);
+  fh+=row("replan cycle (steps, min/p50/p95/max)",sc.cycle_p50!=null?`${dash(sc.cycle_min)} / ${sc.cycle_p50} / ${sc.cycle_p95} / ${dash(sc.cycle_max)}`:null);
   fh+=row("skip on arrival (p50)",sc.skip_p50!=null?sc.skip_p50+(sc.skip_logged_p50!=null?` (logged ${sc.skip_logged_p50})`:""):null);
   fh+=row("executed depth (p50/p95/max)",sc.depth_p50!=null?`${sc.depth_p50} / ${sc.depth_p95} / ${sc.depth_max}`:null);
   fh+=row("server chunk length (p50)",sc.chunk_len_p50);
@@ -882,7 +906,7 @@ function renderTables(){
   fh+=row("limit-guard held left / right",(vi.left!=null||vi.right!=null)?`${(100*(vi.left||0)).toFixed(1)}% / ${(100*(vi.right||0)).toFixed(1)}%`:null);
   fh+="</table>";
   if(cfg){
-    fh+=`<div class="note" style="margin-top:6px">config: ${esc(dash(cfg.checkpoint_label)||"?")} · exec ${esc(dash(cfg.execution_horizon))} · prefetch ${cfg.prefetch_enable?("on, lead "+esc(dash(cfg.prefetch_lead))):"off"}${cfg.rtc_enable?' · <span class="dim">rtc_enable was set (no effect: the server drops it)</span>':""} · v${esc(dash(cfg.package_version))}</div>`;
+    fh+=`<div class="note" style="margin-top:6px">full configuration is in the Run configuration section above</div>`;
     if(cfg.notes)fh+=`<div class="note">notes: ${esc(cfg.notes)}</div>`;
   }else{
     fh+=`<div class="note" style="margin-top:6px">config unknown — no .meta.json sidecar (log predates logger v0.4)</div>`;
@@ -899,9 +923,9 @@ function renderTables(){
 }
 
 // ------------------------------------------------- profile + distribution
-function drawProfile(){
-  const cv=$("profcv"); if(!cv||page!=="signals")return;
-  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=180;
+function drawProfile(cv,big){
+  const own=!cv; cv=cv||$("profcv"); if(!cv||(own&&page!=="signals"))return;
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=big?460:200;
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
   const g=cv.getContext("2d");g.scale(dpr,dpr);
@@ -958,9 +982,9 @@ function drawProfile(){
     return {lines,snapX:X(best)};
   };
 }
-function drawHist(){
-  const cv=$("histcv"); if(!cv||page!=="signals")return;
-  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=150;
+function drawHist(cv,big){
+  const own=!cv; cv=cv||$("histcv"); if(!cv||(own&&page!=="signals"))return;
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=big?420:170;
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
   const g=cv.getContext("2d");g.scale(dpr,dpr);
@@ -1007,6 +1031,61 @@ function drawHist(){
       `at splices: <b>${ca}</b> ticks (${nA?(100*ca/nA).toFixed(1):0}%)`],
       snapX:X(bi)+iw/NB/2};
   };
+}
+
+// ---------------------------------------------------------- configuration
+// What the inference actually ran on, straight from the .meta.json sidecar,
+// grouped by what a reader is asking. Every field the client writes is shown;
+// a field the client did not write shows as a dash rather than vanishing, so
+// an older log is visibly older instead of silently thinner.
+const CFG_GROUPS=[
+  ["policy",[
+    ["checkpoint_label","checkpoint"],["task_description","task"],
+    ["package_version","client version"],["started_iso","started"]]],
+  ["scheduling",[
+    ["execution_horizon","execution horizon (steps)"],["server_chunk_len","server chunk length"],
+    ["prefetch_enable","prefetch"],["prefetch_lead","prefetch lead (steps)"],
+    ["control_rate_hz","control rate (Hz)"],["zmq_timeout_ms","request timeout (ms)"]]],
+  ["guards",[
+    ["enable_limits","joint limit guard"],["limits_source","limit source"],
+    ["joint_min","joint min (rad)"],["joint_max","joint max (rad)"],
+    ["ood_warn_fraction","out-of-distribution warning (fraction)"],
+    ["gripper_max_effort","gripper max effort"],["gripper_min_delta","gripper min delta"]]],
+  ["enabled",[
+    ["enable_left_arm","left arm"],["enable_right_arm","right arm"],
+    ["enable_left_gripper","left gripper"],["enable_right_gripper","right gripper"]]],
+  ["server",[["server_host","host"],["server_port","port"]]],
+  ["outcome",[
+    ["duration_s","duration (s)"],["n_rows","control ticks"],["requests_issued","requests"],
+    ["dropped_chunks","chunks dropped"],["stale_chunks","chunks stale"],
+    ["failed_requests","requests failed"],["stall_ticks","stalled ticks"],
+    ["log_chunks","chunk store written"]]],
+];
+function fmtCfg(v){
+  if(v===true)return "on"; if(v===false)return "off";
+  if(v==null||v==="")return "\u2014";
+  if(Array.isArray(v))return v.length+" items";
+  if(typeof v==="object")return Object.keys(v).length?JSON.stringify(v):"\u2014";
+  return String(v);
+}
+function renderConfig(){
+  const box=$("configbox"); if(!box)return;
+  const cfg=runs[runA].cfg;
+  if(!cfg){box.innerHTML='<div class="note">config unknown \u2014 no .meta.json sidecar (log predates logger v0.4)</div>';return}
+  let h='<div class="cfggrid">';
+  CFG_GROUPS.forEach(([title,rows])=>{
+    h+=`<div><h4>${title}</h4><table class="kv">`;
+    rows.forEach(([k,label])=>{h+=`<tr><td>${label}</td><td class="r">${esc(fmtCfg(cfg[k]))}</td></tr>`});
+    h+="</table></div>";
+  });
+  h+="</div>";
+  if(cfg.rtc_enable)h+=`<div class="note">rtc_enable was set (overlap ${esc(dash(cfg.rtc_overlap_steps))}, frozen ${esc(dash(cfg.rtc_frozen_steps))}, ramp ${esc(dash(cfg.rtc_ramp_rate))}) \u2014 no effect: a stock server drops the request, so this ran as a plain prefetch run.</div>`;
+  if(cfg.notes)h+=`<div class="note">notes: ${esc(cfg.notes)}</div>`;
+  const known=new Set(CFG_GROUPS.flatMap(([,r])=>r.map(([k])=>k)).concat(
+    ["rtc_enable","rtc_overlap_steps","rtc_frozen_steps","rtc_ramp_rate","notes","csv_file","chunks_file","joint_order","started_unix","ended_unix","server_info_first"]));
+  const extra=Object.keys(cfg).filter(k=>!known.has(k));
+  if(extra.length)h+=`<div class="note">also recorded: ${extra.map(k=>esc(k)+"="+esc(fmtCfg(cfg[k]))).join(" \u00b7 ")}</div>`;
+  box.innerHTML=h;
 }
 
 // ------------------------------------------------------------------- plans
@@ -1085,6 +1164,32 @@ function drawPlanPanel(cv,j,big){
   g.textAlign="left";
 
   g.save();g.beginPath();g.rect(padL,padT,iw,ih);g.clip();
+
+  // Chunk boundaries, in the same colour the signals page uses for them, so
+  // "where did a new plan take over" is a line you can see rather than a
+  // 9 px tick you have to look for. Labelled with the chunk number when
+  // there is room.
+  const bnds=runs[runA].bounds||[], bseq=runs[runA].bound_seq||[];
+  const vb=[]; for(let k=0;k<bnds.length;k++) if(bnds[k]>=t0&&bnds[k]<=t1) vb.push(k);
+  if(vb.length){
+    g.strokeStyle=css("--bound");g.lineWidth=1;g.globalAlpha=vb.length>40?.3:.7;
+    g.beginPath(); vb.forEach(k=>{g.moveTo(X(bnds[k]),padT);g.lineTo(X(bnds[k]),padT+ih)}); g.stroke();
+    g.globalAlpha=1;
+    if(iw/vb.length>=40){
+      g.fillStyle=css("--bound");g.font=(big?10:9)+"px "+mono;
+      vb.forEach(k=>g.fillText("c"+(bseq[k]!=null?bseq[k]:k),X(bnds[k])+2,padT+10));
+      g.font=(big?11:10)+"px "+mono;
+    }
+  }
+
+  // The small grid panel shows the EXECUTED part of each plan plus the
+  // command; the enlarged view adds the skipped head and the discarded tail.
+  // All three regions at 300 px were one pale smear, because a later chunk's
+  // skipped head draws over the previous chunk's executed steps and the eye
+  // cannot separate three hues at 1.4 px. What the grid needs to say is
+  // "here is where each plan disagreed with what was sent"; the detail of
+  // which part of a plan was thrown away is for when you have zoomed in.
+  const showAll=big;
   if(drawPlans){
     // Alpha falls as more plans overlap so a dense window stays readable, but
     // never below the floor that made these invisible in the first place.
@@ -1102,6 +1207,7 @@ function drawPlanPanel(cv,j,big){
         const reg=regionOf(k,skip,depth,cfg);
         let k2=k;
         while(k2<P.H-1&&regionOf(k2,skip,depth,cfg)===reg)k2++;
+        if(!showAll&&reg!=="executed"){k=k2;continue}
         const wt=WEIGHT[reg]||WEIGHT.skipped;
         g.strokeStyle=css(REGION_COLOR[reg]);
         g.globalAlpha=Math.min(1,al*wt.a+(reg==="executed"?.15:0));
@@ -1156,6 +1262,12 @@ function drawPlanPanel(cv,j,big){
   if(!drawPlans){
     const msg=big?"plans hidden - zoom in (scroll) to separate them"
                  :"click to enlarge and see every plan";
+    const w=g.measureText(msg).width;
+    g.fillStyle=css("--surface");g.globalAlpha=.9;
+    g.fillRect(padL+4,padT+4,w+10,15);g.globalAlpha=1;
+    g.fillStyle=css("--muted");g.fillText(msg,padL+9,padT+15);
+  }else if(!big){
+    const msg="executed steps only \u2014 enlarge for skipped and discarded";
     const w=g.measureText(msg).width;
     g.fillStyle=css("--surface");g.globalAlpha=.9;
     g.fillRect(padL+4,padT+4,w+10,15);g.globalAlpha=1;
@@ -1378,19 +1490,25 @@ function drawPredCharts(){
     {color:"--warn",label:"acceleration (mrad/tick²)"},
     {color:"--accent",label:"executed"},{color:"--ghost",label:"skipped (prefetch cut)"},
     {color:"--tail",label:"discarded tail"}]);
-  if(cos)drawAcrossHorizon(cos,P?[{v:P.dircos_k,color:"--cmd",label:"direction cosine",dp:2,unit:""}]:[{v:[],color:"--cmd",label:"",dp:2}],
-    {ymin:-1,ymax:1,unit:"cos",height:230,markUsable:true,
+  if(cos)drawHzCos(cos,false);
+  if(acc)drawHzAcc(acc,false);
+}
+function drawHzCos(cv,big){
+  const P=runs[runA].pred;
+  drawAcrossHorizon(cv,P?[{v:P.dircos_k,color:"--cmd",label:"direction cosine",dp:2,unit:""}]:[{v:[],color:"--cmd",label:"",dp:2}],
+    {ymin:-1,ymax:1,unit:"cos",height:big?460:230,markUsable:true,
      refs:[{v:DIRCOS_REF,color:"--good"}]});
-  if(acc){
-    const mx=P?Math.max(1,...[...(P.accel_k||[]),...(P.step_k||[])].filter(v=>v!=null)):1;
-    drawAcrossHorizon(acc,P?[{v:P.step_k,color:"--act",label:"movement per step",dp:1,unit:"mrad"},
-                             {v:P.accel_k,color:"--warn",label:"acceleration",dp:1,unit:"mrad/tick²"}]:[{v:[],color:"--act",label:"",dp:1}],
-      {ymin:0,ymax:Math.ceil(mx*1.1),unit:"mrad",height:205,markUsable:true});
-  }
+}
+function drawHzAcc(cv,big){
+  const P=runs[runA].pred;
+  const mx=P?Math.max(1,...[...(P.accel_k||[]),...(P.step_k||[])].filter(v=>v!=null)):1;
+  drawAcrossHorizon(cv,P?[{v:P.step_k,color:"--act",label:"movement per step",dp:1,unit:"mrad"},
+                          {v:P.accel_k,color:"--warn",label:"acceleration",dp:1,unit:"mrad/tick²"}]:[{v:[],color:"--act",label:"",dp:1}],
+    {ymin:0,ymax:Math.ceil(mx*1.1),unit:"mrad",height:big?460:205,markUsable:true});
 }
 
-function drawAgg(){
-  const cv=$("aggcv"); if(!cv||page!=="plans")return;
+function drawAgg(cv,big){
+  const own=!cv; cv=cv||$("aggcv"); if(!cv||(own&&page!=="plans"))return;
   const alg=$("aggLg");
   if(alg)alg.innerHTML=legendHTML([
     {color:"--act",label:"median over every chunk pair"},
@@ -1398,7 +1516,7 @@ function drawAgg(){
     {color:"--accent",label:"executed"},{color:"--ghost",label:"skipped (prefetch cut)"},
     {color:"--tail",label:"discarded tail"},
     {color:"--cut",label:"prefetch cut"}]);
-  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=220;
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=big?460:220;
   if(!W)return;
   cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+"px";
   const g=cv.getContext("2d");g.scale(dpr,dpr);
@@ -1492,10 +1610,10 @@ function renderPlans(){
   });
   // renderPlans() clears panelReg, so an open enlarged view has to be put back
   // or the next resize/run-switch orphans it and it stops redrawing.
-  if(modalJoint!=null&&modalKind==="plans"){
-    const mc=$("mcanvas");
-    panelReg.push({cv:mc,joint:modalJoint,big:true,plans:true});
-    drawWhenSized(mc,()=>drawPlanPanel(mc,modalJoint,true));
+  if(modalKind&&ENLARGE[modalKind]){
+    const mc=$("mcanvas"), E=ENLARGE[modalKind], jj=modalJoint;
+    const entry={cv:mc,joint:jj,big:true,plans:modalKind==="plans",draw:()=>E.draw(mc,jj)};
+    panelReg.push(entry); drawWhenSized(mc,entry.draw);
   }
   requestAnimationFrame(drawPredCharts);
   requestAnimationFrame(drawAgg);
@@ -1503,6 +1621,9 @@ function renderPlans(){
 
 // ------------------------------------------------------------------ matrix
 function renderMatrix(){
+  // group -> how many of the columns below belong to it, in order
+  const GROUPS=[["run",2],["configuration",2],["scheduling",3],["smoothness (joint space)",3],
+                ["jitter diagnosis",5],["model plan",2],["outcome",5]];
   const cols=[
     ["run",r=>esc(r.name)],["ckpt",r=>r.cfg?esc(dash(r.cfg.checkpoint_label)):"—"],
     ["mode",r=>r.cfg?(r.cfg.prefetch_enable?"prefetch":"blocking"):"—"],
@@ -1529,10 +1650,15 @@ function renderMatrix(){
     ["lat p50/p95",r=>r.meta.lat_p50!=null?`${r.meta.lat_p50}/${dash((r.schedule||{}).lat_p95)}`:"—"],
     ["limit %",r=>{const v=r.violations||{};return (v.left!=null||v.right!=null)?(100*Math.max(v.left||0,v.right||0)).toFixed(1):"—"}],
   ];
-  let h="<table><tr>"+cols.map(c=>`<th${c[0]==="run"?"":' class="r"'}>${c[0]}</th>`).join("")+"<th>verdicts</th></tr>";
+  let h='<table class="matrix"><tr>';
+  let ci=0;
+  GROUPS.forEach(([g,n])=>{h+=`<th class="grp${ci?" gs":""}" colspan="${n}">${g}</th>`;ci+=n});
+  h+=`<th class="grp gs">verdicts</th></tr><tr>`;
+  const starts=new Set(); {let a=0; GROUPS.forEach(([,n])=>{starts.add(a);a+=n})}
+  h+=cols.map((c,i)=>`<th class="${c[0]==="run"?"":"r"}${starts.has(i)&&i?" gs":""}">${c[0]}</th>`).join("")+'<th class="gs">verdicts</th></tr>';
   visibleNames().forEach(n=>{
     const r={...runs[n],name:n};
-    h+="<tr>"+cols.map((c,i)=>`<td${i?' class="r"':""}>${c[1](r)}</td>`).join("");
+    h+="<tr>"+cols.map((c,i)=>`<td class="${i?"r":""}${starts.has(i)&&i?" gs":""}">${c[1](r)}</td>`).join("");
     const vs=verdicts(runs[n]);
     h+=`<td>${vs.length?vs.map(v=>`<span style="color:${v.ok?"var(--good)":"var(--warn)"};font-weight:600">${v.ok?"✓":"✗"} ${v.k}</span>`).join(" &nbsp;"):"—"}</td></tr>`;
   });
