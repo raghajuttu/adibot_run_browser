@@ -171,6 +171,14 @@ class Options:
     its demonstrations is emitting a zigzag rather than a trajectory, which
     is a model problem no scheduling strategy can fix."""
 
+    measured_smooth_min: float = 0.8
+    """Direction continuity of the MEASURED joints at or above which the arm
+    counts as moving smoothly, whatever the command was doing. This is the
+    number that decides whether there is visible jitter to diagnose at all:
+    below it the guide's Case A/B/C tree applies, at or above it the command's
+    roughness is being filtered out by the mechanics and there is nothing to
+    fix. Judged against the demonstrations, which sit at dircos_reference."""
+
     dircos_usable_min: float = 0.8
     """A horizon step counts as 'usable' when the model's plan keeps at least
     this much direction continuity there. The longest run of usable steps is
