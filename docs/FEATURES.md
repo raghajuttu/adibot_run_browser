@@ -191,3 +191,33 @@ Conventions that keep it robust when extending:
   run itself, not modeled — so the metrics transfer to other arms.
 - The CSV schema is described in `config.py:column_names`; if the logger's
   column names ever change, that dict is the only place to update.
+
+### Computed but not drawn yet
+
+`analysis.py` emits two per-chunk series that no chart currently reads. They
+are already in the page's JSON, so drawing one needs only a drawer in
+`template.py` — no analysis work:
+
+| output | one entry per | fields |
+|---|---|---|
+| `schedule.chunk_spans` | chunk | `seq`, `t`, `skip`, `depth`, plus `H`, the chunk length |
+| `smooth.splice_series` | boundary crossing | `t`, `seq`, `mrad` |
+
+Both answer a question the summary statistics cannot. `depth_p50`/`depth_p95`
+say how deep the run typically reached, but not whether it used steps 8–30 of
+every chunk or alternated 8–12 and 8–38 — same median, completely different
+scheduling. The splice ratio says the seam is rough on average, but not
+whether that is a steady offset or three bad switches in an otherwise clean
+run — the difference between a scheduling problem and an incident.
+
+Both come from `horizon_idx` and `inference_seq` in the CSV, so unlike the
+overlap and plan metrics they exist for **every** run, including those with no
+`.chunks.npz`.
+
+Inside `chunk_spans` all four lists are indexed by boundary in row order — the
+same order as `bound_seq` — so they read row by row as one table. Anything
+added beside them must use that order too. Grouping by `seq` value instead
+sorts by chunk id, which matches row order only while ids count upward: after
+a counter reset each chunk silently takes another chunk's timestamp, and an id
+appearing in two separate blocks leaves the id/skip/depth lists shorter than
+the time list.
