@@ -272,6 +272,12 @@ def process_run(
     run["profile"] = _chunk_profile(df, names, hi, new_chunk, cfg)
     run["schedule"] = _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg)
     run["smooth"] = _smoothness(df, names, new_chunk, dt_ms, cfg)
+    # the splice series is emitted by row index; give it time and chunk id too
+    if isinstance(run["smooth"].get("splice_series"), dict):
+        ss = run["smooth"]["splice_series"]
+        ss["t"] = [round(float(t[i]), 3) for i in ss["i"]]
+        ss["seq"] = [int(seq[i]) for i in ss["i"]]
+        del ss["i"]
     run["grasp_events"] = _grasp_attempts(df, names, t, hi, run_meta, cfg)
     run["violations"] = _violation_rates(df, run_meta, cfg)
     # Everything below that reads the chunk store must see a store that
@@ -469,6 +475,35 @@ def _schedule(df, t, hi, seq, new_chunk, dt_ms, cfg: Options) -> dict:
     out["depth_p50"] = _pct(depths, 50)
     out["depth_p95"] = _pct(depths, 95)
     out["depth_max"] = int(depths.max())
+    # The spans themselves. depth p50/p95/max answer "how deep, typically",
+    # which cannot distinguish a run that used steps 8-30 of every chunk from
+    # one that alternated 8-12 and 8-38 — same median, completely different
+    # scheduling. The coverage chart needs one span per chunk, so ship them.
+    # Derived from horizon_idx in the CSV, so this exists for every run,
+    # including those with no chunk store.
+    #
+    # The four lists are read row-by-row as one table, so they MUST share an
+    # order. Every one of them is therefore indexed by BOUNDARY, in row order,
+    # the same way run["bound_seq"] is. Grouping by seq value instead orders by
+    # chunk id, which matches row order only while ids count upward: after a
+    # counter reset each chunk would silently take another chunk's timestamp,
+    # and an id appearing in two separate blocks would make the id/skip/depth
+    # lists shorter than the time list and slide the pairing from there on.
+    block = np.cumsum(new_chunk) - 1      # 0,0,0,1,1,2,... one id per block
+    per_block = pd.Series(hi).groupby(block)
+    out["chunk_spans"] = {
+        "seq": [int(v) for v in seq[new_chunk]],
+        "t": [round(float(v), 3) for v in t[new_chunk]],
+        "skip": [int(v) for v in per_block.min().values],
+        "depth": [int(v) for v in per_block.max().values],
+    }
+    # Chunk length, for the unexecuted tail: the logged column when the client
+    # writes one, else the deepest step anyone reached.
+    cl = _opt_series(df, col["chunk_len"])
+    H = None
+    if cl is not None and cl.notna().any():
+        H = int(np.nanmedian(cl.dropna().values.astype(float)))
+    out["chunk_spans"]["H"] = int(H) if H else int(depths.max()) + 1
     # stalls: any tick interval beyond the threshold. Expected in the old
     # blocking loop; starvation in a prefetch run.
     stall = dt_ms > cfg.stall_gap_ms
@@ -528,6 +563,15 @@ def _smoothness(df, names, new_chunk, dt_ms, cfg: Options) -> dict:
     within = ~at
     out["step_within_p50"] = _med(mag[within])
     out["step_splice_p50"] = _med(mag[at])
+    # Every splice, in order. The ratio is a median of these over a median of
+    # the within-chunk pool, and a single ratio cannot say whether the splice
+    # is a steady offset or three bad switches in an otherwise clean run —
+    # which is the difference between a scheduling problem and an incident.
+    idx = np.where(at)[0]
+    out["splice_series"] = {
+        "i": [int(v) + 1 for v in idx],          # CSV row the switch lands on
+        "mrad": [round(float(v), 1) if np.isfinite(v) else None for v in mag[idx]],
+    }
     if (
         out["step_within_p50"] is not None
         and out["step_splice_p50"] is not None
